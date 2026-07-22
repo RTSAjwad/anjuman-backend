@@ -14,6 +14,7 @@ mod handlers {
     pub mod login;
     pub mod logout;
     pub mod me;
+    pub mod note_types_handler;
     pub mod notes;
     pub mod reviews;
     pub mod search_users;

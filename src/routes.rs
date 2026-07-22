@@ -7,8 +7,8 @@ use axum::{
 
 use crate::{
     handlers::{
-        admin_users, analytics, classes, dashboard, decks, health, login, logout, me, notes,
-        reviews, search_users, study, users,
+        admin_users, analytics, classes, dashboard, decks, health, login, logout, me,
+        note_types_handler, notes, reviews, search_users, study, users,
     },
     state::AppState,
 };
@@ -70,6 +70,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/decks/{id}/classes/{class_id}",
             delete(decks::remove_deck_from_class),
+        )
+        // Note Types
+        .route("/note-types", get(note_types_handler::list_note_types))
+        .route("/note-types", post(note_types_handler::create_note_type))
+        .route("/note-types/{id}", get(note_types_handler::get_note_type))
+        .route(
+            "/note-types/{id}",
+            patch(note_types_handler::update_note_type),
+        )
+        .route(
+            "/note-types/{id}",
+            delete(note_types_handler::delete_note_type),
         )
         // Notes
         .route("/decks/{deck_id}/notes", post(notes::create_note))
