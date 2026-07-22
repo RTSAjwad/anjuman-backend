@@ -372,6 +372,41 @@ components:
         interval_days: { type: integer, description: "Days until next review" }
 
     # -------------------------------------------------------------------
+    # Card Browser
+    # -------------------------------------------------------------------
+    CardBrowserResponse:
+      type: object
+      properties:
+        card_id: { type: integer }
+        note_id: { type: integer }
+        deck_id: { type: integer }
+        deck_title: { type: string }
+        template_index: { type: integer }
+        front: { type: string }
+        back: { type: string }
+        note_type_name: { type: string }
+        fields: { type: object }
+        state: { type: string, nullable: true }
+        due_at: { type: integer, nullable: true }
+        stability: { type: number, format: double, nullable: true }
+        difficulty: { type: number, format: double, nullable: true }
+        reps: { type: integer, nullable: true }
+        lapses: { type: integer, nullable: true }
+        created_at: { type: string }
+
+    CardBrowserPage:
+      type: object
+      properties:
+        cards:
+          {
+            type: array,
+            items: { $ref: "#/components/schemas/CardBrowserResponse" },
+          }
+        page: { type: integer }
+        per_page: { type: integer }
+        total: { type: integer }
+
+    # -------------------------------------------------------------------
     # Analytics
     # -------------------------------------------------------------------
     StudentStats:
@@ -1454,6 +1489,63 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # -----------------------------------------------------------------
+  # Card Browser
+  # -----------------------------------------------------------------
+  /cards:
+    get:
+      tags: [Cards]
+      summary: Browse cards with filtering, sorting, and pagination
+      description: Teachers and admins see all cards in their school's decks. Students see only their own card states.
+      operationId: browseCards
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - {
+            name: deck_id,
+            in: query,
+            required: false,
+            schema: { type: integer },
+            description: "Filter by deck",
+          }
+        - {
+            name: q,
+            in: query,
+            required: false,
+            schema: { type: string },
+            description: "Search in card content (matches fields JSON)",
+          }
+        - {
+            name: sort,
+            in: query,
+            required: false,
+            schema:
+              {
+                type: string,
+                enum: [created_at, due_at, deck, question],
+                default: created_at,
+              },
+          }
+        - {
+            name: page,
+            in: query,
+            required: false,
+            schema: { type: integer, default: 1 },
+          }
+        - {
+            name: per_page,
+            in: query,
+            required: false,
+            schema: { type: integer, default: 50, maximum: 100 },
+          }
+      responses:
+        "200":
+          description: Paginated card list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CardBrowserPage"
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   # -----------------------------------------------------------------
   # Reviews

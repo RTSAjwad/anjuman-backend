@@ -7,7 +7,7 @@ use axum::{
 
 use crate::{
     handlers::{
-        admin_users, analytics, classes, dashboard, decks, health, login, logout, me,
+        admin_users, analytics, card_browser, classes, dashboard, decks, health, login, logout, me,
         note_types_handler, notes, reviews, search_users, study, users,
     },
     state::AppState,
@@ -43,6 +43,8 @@ pub fn router(state: AppState) -> Router {
         )
         // Study
         .route("/decks/{id}/study", get(study::deck_study))
+        // Card browser
+        .route("/cards", get(card_browser::browse_cards))
         // Reviews
         .route("/reviews", post(reviews::submit_review))
         // Analytics
