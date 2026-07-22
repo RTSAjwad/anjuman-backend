@@ -3,3 +3,10 @@
 # Remove ARCHITECTURE.md as it is outdated and a proper one will be pushed later
 # as a readme.
 ARCHITECTURE.md
+
+# SQLite files that will appear when running but shouldn't be stored in repo
+platform.db
+platform.db-shm
+platform.db-wal
+platform.db.backup
+platform.db.bak
