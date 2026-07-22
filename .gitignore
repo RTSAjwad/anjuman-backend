@@ -1,2 +1,5 @@
 /target
+
+# Remove ARCHITECTURE.md as it is outdated and a proper one will be pushed later
+# as a readme.
 ARCHITECTURE.md

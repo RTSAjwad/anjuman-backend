@@ -1,0 +1,1448 @@
+openapi: "3.0.3"
+info:
+  title: Anki Classroom API
+  description: |
+    Backend API for the Anki Classroom spaced repetition platform.
+    All authenticated endpoints require a JWT in the `Authorization: Bearer <token>` header.
+    Tokens are obtained via `POST /auth/login` and expire after 24 hours.
+    Roles: `admin`, `teacher`, `student`.
+  version: "0.1.0"
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    # -------------------------------------------------------------------
+    # Shared
+    # -------------------------------------------------------------------
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+    UserRole:
+      type: string
+      enum: [admin, teacher, student]
+
+    # -------------------------------------------------------------------
+    # Auth
+    # -------------------------------------------------------------------
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    LoginResponse:
+      type: object
+      properties:
+        token: { type: string, description: "JWT access token, valid 24h" }
+        user: { $ref: "#/components/schemas/UserInfo" }
+
+    UserInfo:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        role: { type: string }
+        school_id: { type: integer }
+
+    # -------------------------------------------------------------------
+    # Users
+    # -------------------------------------------------------------------
+    CreateUser:
+      type: object
+      required: [school_id, email, password, role, first_name, last_name]
+      properties:
+        school_id: { type: integer }
+        email: { type: string, format: email }
+        password: { type: string }
+        role: { $ref: "#/components/schemas/UserRole" }
+        first_name: { type: string }
+        last_name: { type: string }
+
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        role: { type: string }
+        school_id: { type: integer }
+
+    UpdateUser:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        role: { $ref: "#/components/schemas/UserRole" }
+        first_name: { type: string }
+        last_name: { type: string }
+
+    UserDetail:
+      type: object
+      properties:
+        id: { type: integer }
+        school_id: { type: integer }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        role: { type: string }
+        created_at: { type: string }
+
+    MeResponse:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        role: { type: string }
+        school_id: { type: integer }
+
+    SearchResult:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        role: { type: string }
+
+    # -------------------------------------------------------------------
+    # Classes
+    # -------------------------------------------------------------------
+    CreateClass:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+
+    RenameClass:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+
+    AddMember:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: integer }
+
+    ClassResponse:
+      type: object
+      properties:
+        id: { type: integer }
+        school_id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        archived: { type: boolean }
+        created_by: { type: integer }
+        created_at: { type: string }
+
+    MemberResponse:
+      type: object
+      properties:
+        user_id: { type: integer }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        role: { type: string }
+        joined_at: { type: integer }
+
+    RosterResponse:
+      type: object
+      properties:
+        class: { $ref: "#/components/schemas/ClassResponse" }
+        members:
+          {
+            type: array,
+            items: { $ref: "#/components/schemas/MemberResponse" },
+          }
+
+    ClassInfo:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+
+    # -------------------------------------------------------------------
+    # Decks
+    # -------------------------------------------------------------------
+    CreateDeck:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        description: { type: string }
+
+    RenameDeck:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+
+    ShareDeck:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: integer }
+
+    DeckResponse:
+      type: object
+      properties:
+        id: { type: integer }
+        school_id: { type: integer }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        created_by: { type: integer }
+        owner_email: { type: string }
+        owner_first_name: { type: string }
+        owner_last_name: { type: string }
+        created_at: { type: string }
+        new_count: { type: integer }
+        learning_count: { type: integer }
+        relearning_count:
+          type: integer
+          description: Cards in relearning state (rated Again).
+        due_count: { type: integer }
+        total_count: { type: integer }
+
+    CollaboratorResponse:
+      type: object
+      properties:
+        user_id: { type: integer }
+        email: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        shared_at: { type: integer }
+
+    DeckDetailResponse:
+      type: object
+      properties:
+        deck: { $ref: "#/components/schemas/DeckResponse" }
+        collaborators:
+          {
+            type: array,
+            items: { $ref: "#/components/schemas/CollaboratorResponse" },
+          }
+        classes:
+          { type: array, items: { $ref: "#/components/schemas/ClassInfo" } }
+
+    # -------------------------------------------------------------------
+    # Notes
+    # -------------------------------------------------------------------
+    CreateNote:
+      type: object
+      required: [note_type, fields]
+      properties:
+        note_type:
+          {
+            type: string,
+            description: 'e.g. "Basic" or "Basic (and reversed)"',
+          }
+        fields:
+          { type: object, description: 'e.g. {"Front": "...", "Back": "..."}' }
+
+    UpdateNote:
+      type: object
+      properties:
+        note_type: { type: string }
+        fields: { type: object }
+
+    CardSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        template_index: { type: integer }
+        front: { type: string }
+        back: { type: string }
+
+    NoteResponse:
+      type: object
+      properties:
+        id: { type: integer }
+        deck_id: { type: integer }
+        note_type: { type: string }
+        fields: { type: object }
+        cards:
+          { type: array, items: { $ref: "#/components/schemas/CardSummary" } }
+        created_at: { type: string }
+
+    # -------------------------------------------------------------------
+    # Study
+    # -------------------------------------------------------------------
+    StudyCard:
+      type: object
+      properties:
+        card_id: { type: integer }
+        front: { type: string }
+        back: { type: string }
+        state: { type: string, enum: [new, learning, review, relearning] }
+        due_at: { type: integer, nullable: true }
+        stability: { type: number, format: double }
+        difficulty: { type: number, format: double }
+        reps: { type: integer }
+        lapses: { type: integer }
+        deck_title: { type: string }
+        predicted_interval:
+          {
+            type: object,
+            nullable: true,
+            description: "Days until next review for each rating (1=Again,2=Hard,3=Good,4=Easy). Null for new cards.",
+            properties:
+              "1": { type: integer }
+              "2": { type: integer }
+              "3": { type: integer }
+              "4": { type: integer }
+          }
+
+    StudySession:
+      type: object
+      properties:
+        deck_id: { type: integer, nullable: true }
+        deck_title: { type: string, nullable: true }
+        cards:
+          { type: array, items: { $ref: "#/components/schemas/StudyCard" } }
+        total_cards: { type: integer }
+        reviewed_count: { type: integer }
+
+    # -------------------------------------------------------------------
+    # Reviews
+    # -------------------------------------------------------------------
+    SubmitReview:
+      type: object
+      required: [card_id, rating]
+      properties:
+        card_id: { type: integer }
+        rating:
+          {
+            type: integer,
+            minimum: 1,
+            maximum: 4,
+            description: "1=Again, 2=Hard, 3=Good, 4=Easy",
+          }
+        response_time_ms: { type: integer, nullable: true }
+
+    ReviewResponse:
+      type: object
+      properties:
+        card_id: { type: integer }
+        state: { type: string }
+        due_at: { type: integer, nullable: true }
+        stability: { type: number, format: double }
+        difficulty: { type: number, format: double }
+        reps: { type: integer }
+        lapses: { type: integer }
+        interval_days: { type: integer, description: "Days until next review" }
+
+    # -------------------------------------------------------------------
+    # Analytics
+    # -------------------------------------------------------------------
+    StudentStats:
+      type: object
+      properties:
+        student_id: { type: integer }
+        total_reviews: { type: integer }
+        reviews_today: { type: integer }
+        retention_rate: { type: number, format: double }
+        average_rating: { type: number, format: double }
+        cards_total: { type: integer }
+        cards_mastered: { type: integer }
+        cards_learning: { type: integer }
+        cards_struggling: { type: integer }
+        study_streak_days: { type: integer }
+        time_spent_today_seconds: { type: integer }
+        sessions_this_week: { type: integer }
+
+    DailyPoint:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        reviews: { type: integer }
+        avg_rating: { type: number, format: double }
+        avg_time_ms: { type: number, format: double }
+
+    StudentStatsWithEmail:
+      type: object
+      properties:
+        student_id: { type: integer }
+        email: { type: string }
+        total_reviews: { type: integer }
+        retention_rate: { type: number, format: double }
+        cards_mastered: { type: integer }
+        last_active: { type: string, format: date, nullable: true }
+
+    DifficultCard:
+      type: object
+      properties:
+        card_id: { type: integer }
+        front: { type: string }
+        avg_rating: { type: number, format: double }
+        total_reviews: { type: integer }
+
+    ClassAnalytics:
+      type: object
+      properties:
+        class_name: { type: string }
+        students_enrolled: { type: integer }
+        average_retention: { type: number, format: double }
+        most_difficult_cards:
+          { type: array, items: { $ref: "#/components/schemas/DifficultCard" } }
+        students:
+          {
+            type: array,
+            items: { $ref: "#/components/schemas/StudentStatsWithEmail" },
+          }
+
+    StudentDetail:
+      type: object
+      properties:
+        student_id: { type: integer }
+        email: { type: string }
+        total_reviews: { type: integer }
+        reviews_today: { type: integer }
+        retention_rate: { type: number, format: double }
+        average_rating: { type: number, format: double }
+        cards_total: { type: integer }
+        cards_mastered: { type: integer }
+        cards_learning: { type: integer }
+        cards_struggling: { type: integer }
+        study_streak_days: { type: integer }
+        time_spent_today_seconds: { type: integer }
+        sessions_this_week: { type: integer }
+        daily:
+          { type: array, items: { $ref: "#/components/schemas/DailyPoint" } }
+
+    # -------------------------------------------------------------------
+    # Dashboard
+    # -------------------------------------------------------------------
+    ClassCard:
+      type: object
+      properties:
+        class_id: { type: integer }
+        name: { type: string }
+        student_count: { type: integer }
+        avg_retention: { type: number, format: double }
+        last_activity: { type: string, format: date, nullable: true }
+
+    AttentionStudent:
+      type: object
+      properties:
+        student_id: { type: integer }
+        email: { type: string }
+        reason: { type: string, enum: [inactive_7d, low_retention] }
+        last_active: { type: string, format: date, nullable: true }
+        retention: { type: number, format: double }
+        class_name: { type: string }
+
+    DashboardResponse:
+      type: object
+      properties:
+        total_students: { type: integer }
+        active_classes: { type: integer }
+        reviews_today: { type: integer }
+        average_retention: { type: number, format: double }
+        classes:
+          { type: array, items: { $ref: "#/components/schemas/ClassCard" } }
+        attention_needed:
+          {
+            type: array,
+            items: { $ref: "#/components/schemas/AttentionStudent" },
+          }
+
+    # -------------------------------------------------------------------
+    # Error
+    # -------------------------------------------------------------------
+    ErrorResponse:
+      type: object
+      properties:
+        error: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Insufficient role permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+# ===================================================================
+# Paths
+# ===================================================================
+paths:
+  # -----------------------------------------------------------------
+  # Health
+  # -----------------------------------------------------------------
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Server is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  # -----------------------------------------------------------------
+  # Auth
+  # -----------------------------------------------------------------
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and receive a JWT
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current JWT
+      operationId: logout
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # -----------------------------------------------------------------
+  # Users
+  # -----------------------------------------------------------------
+  /users/search:
+    get:
+      tags: [Users]
+      summary: Search users by name or email (teacher or admin)
+      description: Case-insensitive contains match on first_name, last_name, or email. Admins are excluded from results. Limited to 20 results.
+      operationId: searchUsers
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, description: "Search query" }
+      responses:
+        "200":
+          description: Matching users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SearchResult"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /users:
+    get:
+      tags: [Users]
+      summary: List all users in the school (admin only)
+      operationId: listUsers
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserDetail"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Users]
+      summary: Register a new user
+      operationId: createUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUser"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: Get a user (admin only, same school)
+      operationId: getUser
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserDetail"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Users]
+      summary: Update a user's email, password, or role (admin only)
+      operationId: updateUser
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUser"
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserDetail"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [Users]
+      summary: Delete a user (admin only)
+      operationId: deleteUser
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: User deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /me:
+    get:
+      tags: [Users]
+      summary: Get the authenticated user's profile
+      operationId: me
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # -----------------------------------------------------------------
+  # Classes
+  # -----------------------------------------------------------------
+  /classes:
+    get:
+      tags: [Classes]
+      summary: List classes the caller belongs to
+      description: Admins see all classes in their school. Teachers and students see classes they own or are members of.
+      operationId: listClasses
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Class list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClassResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Classes]
+      summary: Create a class (teacher or admin)
+      operationId: createClass
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClass"
+      responses:
+        "201":
+          description: Class created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /classes/{id}:
+    get:
+      tags: [Classes]
+      summary: Get a single class (member, owner, or admin)
+      operationId: getClass
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Class details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Classes]
+      summary: Delete a class (owner or admin)
+      operationId: deleteClass
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Class deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /classes/{id}/rename:
+    patch:
+      tags: [Classes]
+      summary: Rename a class (member teacher or admin)
+      operationId: renameClass
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameClass"
+      responses:
+        "200":
+          description: Class renamed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /classes/{id}/archive:
+    post:
+      tags: [Classes]
+      summary: Toggle archive status (member teacher or admin)
+      operationId: archiveClass
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Archive status toggled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /classes/{id}/roster:
+    get:
+      tags: [Classes]
+      summary: View class roster (member, owner, or admin)
+      operationId: viewRoster
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Class with member list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RosterResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /classes/{id}/members:
+    post:
+      tags: [Classes]
+      summary: Add a student or teacher to a class (member teacher or admin)
+      operationId: addMember
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddMember"
+      responses:
+        "201":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /classes/{id}/members/{userId}:
+    delete:
+      tags: [Classes]
+      summary: Remove a member from a class (member teacher or admin)
+      operationId: removeMember
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: userId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -----------------------------------------------------------------
+  # Decks
+  # -----------------------------------------------------------------
+  /decks:
+    get:
+      tags: [Decks]
+      summary: List decks visible to the caller
+      description: Teachers see their own decks + shared. Admins see all school decks. Students see decks from their classes + collaborations.
+      operationId: listDecks
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Deck list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeckResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Decks]
+      summary: Create a deck (teacher or admin)
+      operationId: createDeck
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDeck"
+      responses:
+        "201":
+          description: Deck created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /decks/{id}:
+    get:
+      tags: [Decks]
+      summary: Get deck details (owner, admin, or collaborator)
+      operationId: getDeck
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Deck with collaborators
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckDetailResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Decks]
+      summary: Delete a deck (owner or admin)
+      operationId: deleteDeck
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Deck deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/rename:
+    patch:
+      tags: [Decks]
+      summary: Rename a deck (owner, collaborator, or admin)
+      operationId: renameDeck
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameDeck"
+      responses:
+        "200":
+          description: Deck renamed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/duplicate:
+    post:
+      tags: [Decks]
+      summary: Duplicate a deck (teacher or admin, must have view access)
+      operationId: duplicateDeck
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "201":
+          description: Deck duplicated (title becomes "Original Title (copy)")
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/share:
+    post:
+      tags: [Decks]
+      summary: Share a deck with another teacher (owner or admin)
+      operationId: shareDeck
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShareDeck"
+      responses:
+        "200":
+          description: Deck shared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollaboratorResponse"
+        "400":
+          description: Cannot share with a student, admin, or the deck owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/share/{userId}:
+    delete:
+      tags: [Decks]
+      summary: Remove a collaborator from a deck (owner or admin)
+      operationId: unshareDeck
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: userId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Collaborator removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/owner:
+    patch:
+      tags: [Decks]
+      summary: Transfer deck ownership to another teacher (owner or admin)
+      description: The old owner is automatically added as a collaborator. Only teachers can receive ownership.
+      operationId: transferOwner
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: integer, description: "The teacher who will become the new owner" }
+      responses:
+        "200":
+          description: Ownership transferred
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckResponse"
+        "400":
+          description: Target is not a teacher
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/classes:
+    post:
+      tags: [Decks]
+      summary: Add a deck to a class (owner or admin)
+      operationId: addDeckToClass
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [class_id]
+              properties:
+                class_id: { type: integer }
+      responses:
+        "200":
+          description: Deck added to class
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    get:
+      tags: [Decks]
+      summary: List classes a deck is assigned to
+      operationId: listDeckClasses
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: List of classes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClassInfo"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/classes/{classId}:
+    delete:
+      tags: [Decks]
+      summary: Remove a deck from a class (owner or admin)
+      operationId: removeDeckFromClass
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: classId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Deck removed from class
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /decks/{id}/study:
+    get:
+      tags: [Study]
+      summary: Study cards for a deck (must have access via class membership, collaboration, or ownership)
+      operationId: deckStudy
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Cards in the deck with scheduling state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudySession"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Deck is not accessible for study
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -----------------------------------------------------------------
+  # Notes (nested under decks)
+  # -----------------------------------------------------------------
+  /decks/{deckId}/notes:
+    post:
+      tags: [Notes]
+      summary: Create a note in a deck (owner, collaborator, or admin)
+      operationId: createNote
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: deckId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNote"
+      responses:
+        "201":
+          description: Note created with auto-generated cards
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteResponse"
+        "400":
+          description: Unknown note type or missing fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    get:
+      tags: [Notes]
+      summary: List all notes in a deck (owner, collaborator, or admin)
+      operationId: listNotes
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: deckId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Notes with cards
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NoteResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /decks/{deckId}/notes/{noteId}:
+    get:
+      tags: [Notes]
+      summary: Get a single note (owner, collaborator, or admin)
+      operationId: getNote
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: deckId, in: path, required: true, schema: { type: integer } }
+        - { name: noteId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Note with cards
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Notes]
+      summary: Update a note's type or fields (owner, collaborator, or admin)
+      description: Re-renders all cards when fields or type change.
+      operationId: updateNote
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: deckId, in: path, required: true, schema: { type: integer } }
+        - { name: noteId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateNote"
+      responses:
+        "200":
+          description: Note updated, cards re-rendered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteResponse"
+        "400":
+          description: Unknown note type or missing fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Notes]
+      summary: Delete a note and all its cards (owner, collaborator, or admin)
+      operationId: deleteNote
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: deckId, in: path, required: true, schema: { type: integer } }
+        - { name: noteId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Note deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -----------------------------------------------------------------
+  # Reviews
+  # -----------------------------------------------------------------
+  /reviews:
+    post:
+      tags: [Reviews]
+      summary: Submit a card review rating
+      description: |
+        FSRS recalculates the next review interval.
+        Rating 1 (Again): due_at is set to now so the card re-appears
+        in the study queue on the next fetch. The card cycles back until
+        the student gives a passing rating (2-4).
+        Ratings 2-4: the card gets a future due_at based on the FSRS interval.
+      operationId: submitReview
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitReview"
+      responses:
+        "200":
+          description: Review processed, new schedule returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewResponse"
+        "400":
+          description: Rating must be 1-4, or card state not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Card state not found — start a study session first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # -----------------------------------------------------------------
+  # Analytics
+  # -----------------------------------------------------------------
+  /analytics/me:
+    get:
+      tags: [Analytics]
+      summary: Personal stats summary
+      operationId: myStats
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Student's stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentStats"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/me/daily:
+    get:
+      tags: [Analytics]
+      summary: Daily review breakdown (last 30 days)
+      operationId: myDaily
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Daily review data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DailyPoint"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/classes/{id}:
+    get:
+      tags: [Analytics]
+      summary: Class overview with per-student table (class member teacher or admin)
+      operationId: classAnalytics
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Class analytics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassAnalytics"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /analytics/classes/{id}/students/{studentId}:
+    get:
+      tags: [Analytics]
+      summary: Drill into one student's stats (class member teacher or admin)
+      operationId: studentDetail
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - {
+            name: studentId,
+            in: path,
+            required: true,
+            schema: { type: integer },
+          }
+      responses:
+        "200":
+          description: Student detail with daily data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentDetail"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -----------------------------------------------------------------
+  # Dashboard
+  # -----------------------------------------------------------------
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Teacher dashboard overview (teacher or admin)
+      operationId: dashboard
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
