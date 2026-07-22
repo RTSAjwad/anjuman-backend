@@ -71,8 +71,7 @@ async fn ensure_card_states_for_deck(
             (student_id, card_id, state, stability, difficulty, reps, lapses)
         SELECT ?, c.id, 'new', 0.0, 0.0, 0, 0
         FROM cards c
-        JOIN notes n ON n.id = c.note_id
-        WHERE n.deck_id = ?
+        WHERE c.deck_id = ?
         "#,
         student_id,
         deck_id
@@ -216,10 +215,10 @@ pub async fn deck_study(
                d.title as deck_title
         FROM cards c
         JOIN notes n ON n.id = c.note_id
-        JOIN decks d ON d.id = n.deck_id
+        JOIN decks d ON d.id = c.deck_id
         JOIN student_card_states scs
             ON scs.card_id = c.id AND scs.student_id = ?
-        WHERE n.deck_id = ?
+        WHERE c.deck_id = ?
         ORDER BY
             CASE WHEN scs.reps = 0 THEN 0 ELSE 1 END,
             CASE WHEN scs.due_at IS NULL THEN 0 ELSE scs.due_at END

@@ -42,7 +42,7 @@ pub struct UpdateNote {
 #[derive(Serialize)]
 pub struct NoteResponse {
     pub id: i64,
-    pub deck_id: i64,
+    pub deck_ids: Vec<i64>,
     pub note_type_id: i64,
     pub note_type_name: String,
     pub fields: serde_json::Map<String, Value>,
@@ -77,19 +77,21 @@ fn check_teacher_or_admin(claims: &crate::auth::Claims) -> Result<(), (StatusCod
     }
 }
 
-/// Synchronise card rows for a note: ensures one card row exists per template
-/// in the note type. Old extra rows are deleted. No rendered text is stored.
+/// Synchronise card rows for a note in a deck: ensures one card row exists
+/// per template in the note type. Old extra rows are deleted.
 async fn sync_card_rows(
     db: &sqlx::SqlitePool,
     note_id: i64,
+    deck_id: i64,
     nt: &note_types::NoteType,
 ) -> Result<(), StatusCode> {
     let template_count = nt.templates.len() as i64;
 
     for i in 0..template_count {
         sqlx::query!(
-            "INSERT OR IGNORE INTO cards (note_id, template_index, created_at) VALUES (?, ?, unixepoch())",
+            "INSERT OR IGNORE INTO cards (note_id, deck_id, template_index, created_at) VALUES (?, ?, ?, unixepoch())",
             note_id,
+            deck_id,
             i
         )
         .execute(db)
@@ -98,8 +100,9 @@ async fn sync_card_rows(
     }
 
     sqlx::query!(
-        "DELETE FROM cards WHERE note_id = ? AND template_index >= ?",
+        "DELETE FROM cards WHERE note_id = ? AND deck_id = ? AND template_index >= ?",
         note_id,
+        deck_id,
         template_count
     )
     .execute(db)
@@ -115,7 +118,7 @@ async fn fetch_note_with_cards(
     note_id: i64,
 ) -> Result<NoteResponse, StatusCode> {
     let note = sqlx::query!(
-        "SELECT id, deck_id, note_type_id, fields_json, created_at FROM notes WHERE id = ?",
+        "SELECT id, note_type_id, fields_json, created_at FROM notes WHERE id = ?",
         note_id
     )
     .fetch_optional(db)
@@ -131,12 +134,14 @@ async fn fetch_note_with_cards(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let card_rows = sqlx::query!(
-        "SELECT id, template_index FROM cards WHERE note_id = ? ORDER BY template_index",
+        "SELECT id, deck_id, template_index FROM cards WHERE note_id = ? ORDER BY template_index",
         note_id
     )
     .fetch_all(db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let deck_ids: Vec<i64> = card_rows.iter().map(|c| c.deck_id).collect();
 
     let card_summaries: Vec<CardSummary> = card_rows
         .into_iter()
@@ -154,7 +159,7 @@ async fn fetch_note_with_cards(
 
     Ok(NoteResponse {
         id: note.id,
-        deck_id: note.deck_id,
+        deck_ids,
         note_type_id: note.note_type_id,
         note_type_name: nt.name,
         fields,
@@ -189,18 +194,22 @@ pub async fn create_note(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid fields JSON".to_string()))?;
 
     let result = sqlx::query!(
-        "INSERT INTO notes (deck_id, note_type_id, fields_json, created_at) VALUES (?, ?, ?, unixepoch())",
-        deck_id,
+        "INSERT INTO notes (note_type_id, fields_json, created_at) VALUES (?, ?, unixepoch())",
         body.note_type_id,
         fields_json
     )
     .execute(&state.db)
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()))?;
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Database error".to_string(),
+        )
+    })?;
 
     let note_id = result.last_insert_rowid();
 
-    sync_card_rows(&state.db, note_id, &nt)
+    sync_card_rows(&state.db, note_id, deck_id, &nt)
         .await
         .map_err(|s| (s, "Failed to create cards".to_string()))?;
 
@@ -223,7 +232,7 @@ pub async fn get_note(
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
-    if note.deck_id != deck_id {
+    if !note.deck_ids.contains(&deck_id) {
         return Err((StatusCode::NOT_FOUND, "Note not found in this deck"));
     }
 
@@ -239,7 +248,7 @@ pub async fn list_notes(
     decks::check_deck_visible(&state.db, deck_id, claims.school_id, &claims).await?;
 
     let rows = sqlx::query!(
-        "SELECT id FROM notes WHERE deck_id = ? ORDER BY created_at",
+        "SELECT DISTINCT n.id, n.created_at FROM notes n JOIN cards c ON c.note_id = n.id WHERE c.deck_id = ? ORDER BY n.created_at",
         deck_id
     )
     .fetch_all(&state.db)
@@ -269,9 +278,8 @@ pub async fn update_note(
         .map_err(|(s, m)| (s, m.to_string()))?;
 
     let existing = sqlx::query!(
-        "SELECT note_type_id, fields_json FROM notes WHERE id = ? AND deck_id = ?",
-        note_id,
-        deck_id
+        "SELECT note_type_id, fields_json FROM notes WHERE id = ?",
+        note_id
     )
     .fetch_optional(&state.db)
     .await
@@ -319,11 +327,25 @@ pub async fn update_note(
         )
     })?;
 
-    // If the note type changed, re-sync the card rows.
+    // If the note type changed, re-sync card rows in all decks the note is in.
     if new_note_type_id != existing.note_type_id {
-        sync_card_rows(&state.db, note_id, &nt)
-            .await
-            .map_err(|s| (s, "Failed to update cards".to_string()))?;
+        let decks = sqlx::query!(
+            "SELECT DISTINCT deck_id FROM cards WHERE note_id = ?",
+            note_id
+        )
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error".to_string(),
+            )
+        })?;
+        for d in decks {
+            sync_card_rows(&state.db, note_id, d.deck_id, &nt)
+                .await
+                .map_err(|s| (s, "Failed to update cards".to_string()))?;
+        }
     }
 
     let note = fetch_note_with_cards(&state.db, note_id)
@@ -341,14 +363,10 @@ pub async fn delete_note(
     check_teacher_or_admin(&claims)?;
     decks::check_deck_collaborator(&state.db, deck_id, claims.school_id, &claims).await?;
 
-    let result = sqlx::query!(
-        "DELETE FROM notes WHERE id = ? AND deck_id = ?",
-        note_id,
-        deck_id
-    )
-    .execute(&state.db)
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    let result = sqlx::query!("DELETE FROM notes WHERE id = ?", note_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     if result.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "Note not found"));

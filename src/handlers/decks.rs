@@ -457,9 +457,10 @@ pub async fn duplicate_deck(
 
     let new_deck_id = result.last_insert_rowid();
 
-    // Copy all notes and their cards into the new deck.
+    // Copy all notes from the source deck into the new deck.
+    // Notes are deck-independent, so we find notes via their cards' deck_id.
     let notes = sqlx::query!(
-        "SELECT id, note_type_id, fields_json FROM notes WHERE deck_id = ? ORDER BY id",
+        "SELECT DISTINCT n.id, n.note_type_id, n.fields_json FROM notes n JOIN cards c ON c.note_id = n.id WHERE c.deck_id = ? ORDER BY n.id",
         deck_id
     )
     .fetch_all(&mut *tx)
@@ -468,8 +469,7 @@ pub async fn duplicate_deck(
 
     for note in &notes {
         let note_result = sqlx::query!(
-            "INSERT INTO notes (deck_id, note_type_id, fields_json, created_at) VALUES (?, ?, ?, unixepoch())",
-            new_deck_id,
+            "INSERT INTO notes (note_type_id, fields_json, created_at) VALUES (?, ?, unixepoch())",
             note.note_type_id,
             note.fields_json
         )
@@ -480,8 +480,9 @@ pub async fn duplicate_deck(
         let new_note_id = note_result.last_insert_rowid();
 
         let cards = sqlx::query!(
-            "SELECT template_index FROM cards WHERE note_id = ?",
-            note.id
+            "SELECT template_index FROM cards WHERE note_id = ? AND deck_id = ?",
+            note.id,
+            deck_id
         )
         .fetch_all(&mut *tx)
         .await
@@ -489,8 +490,9 @@ pub async fn duplicate_deck(
 
         for card in &cards {
             sqlx::query!(
-                "INSERT INTO cards (note_id, template_index, created_at) VALUES (?, ?, unixepoch())",
+                "INSERT INTO cards (note_id, deck_id, template_index, created_at) VALUES (?, ?, ?, unixepoch())",
                 new_note_id,
+                new_deck_id,
                 card.template_index
             )
             .execute(&mut *tx)
@@ -897,7 +899,7 @@ pub async fn list_decks(
                    u.email as owner_email,
                    u.first_name as owner_first_name,
                    u.last_name as owner_last_name,
-                   (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE n.deck_id = d.id) as "card_count!: i64"
+                   (SELECT COUNT(*) FROM cards c WHERE c.deck_id = d.id) as "card_count!: i64"
             FROM decks d
             JOIN users u ON u.id = d.created_by
             WHERE d.school_id = ?
@@ -939,7 +941,7 @@ pub async fn list_decks(
                    u.email as owner_email,
                    u.first_name as owner_first_name,
                    u.last_name as owner_last_name,
-                   (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE n.deck_id = d.id) as "card_count!: i64"
+                   (SELECT COUNT(*) FROM cards c WHERE c.deck_id = d.id) as "card_count!: i64"
             FROM decks d
             JOIN users u ON u.id = d.created_by
             LEFT JOIN deck_collaborators dc ON dc.deck_id = d.id
@@ -1015,10 +1017,9 @@ pub async fn list_decks(
                 COALESCE(SUM(CASE WHEN scs.due_at <= unixepoch() AND scs.state IN ('review', 'relearning') THEN 1 ELSE 0 END), 0) as "due_count!: i64",
                 COALESCE(SUM(CASE WHEN scs.state = 'relearning' THEN 1 ELSE 0 END), 0) as "relearning_count!: i64"
             FROM cards c
-            JOIN notes n ON n.id = c.note_id
             LEFT JOIN student_card_states scs
                 ON scs.card_id = c.id AND scs.student_id = ?
-            WHERE n.deck_id = ?
+            WHERE c.deck_id = ?
             "#,
             claims.sub,
             deck_id
