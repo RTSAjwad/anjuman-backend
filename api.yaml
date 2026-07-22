@@ -293,7 +293,12 @@ components:
       type: object
       properties:
         id: { type: integer }
-        deck_id: { type: integer }
+        deck_ids:
+          {
+            type: array,
+            items: { type: integer },
+            description: "Deck IDs the note's cards are in",
+          }
         note_type_id: { type: integer }
         note_type_name: { type: string }
         fields: { type: object }
