@@ -253,6 +253,11 @@ components:
         id: { type: integer }
         name: { type: string }
         field_names: { type: array, items: { type: string } }
+        sort_field:
+          {
+            type: string,
+            description: "Field to sort new cards by. Empty = first field (Anki default).",
+          }
         templates:
           { type: array, items: { $ref: "#/components/schemas/Template" } }
     Template:
@@ -1275,7 +1280,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
     post:
       tags: [Note Types]
-      summary: Create a custom note type (not yet implemented)
+      summary: Create a custom note type
       operationId: createNoteType
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -1288,6 +1293,11 @@ paths:
               properties:
                 name: { type: string }
                 field_names: { type: array, items: { type: string } }
+                sort_field:
+                  {
+                    type: string,
+                    description: "Field to sort new cards by (default: first field)",
+                  }
                 templates:
                   {
                     type: array,
@@ -1295,7 +1305,7 @@ paths:
                   }
       responses:
         "201":
-          description: Note type created (not yet implemented)
+          description: Note type created
           content:
             application/json:
               schema:
@@ -1323,7 +1333,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [Note Types]
-      summary: Update a note type (not yet implemented)
+      summary: Update a note type
       operationId: updateNoteType
       security: [{ bearerAuth: [] }]
       parameters:
@@ -1337,6 +1347,7 @@ paths:
               properties:
                 name: { type: string }
                 field_names: { type: array, items: { type: string } }
+                sort_field: { type: string }
                 templates:
                   {
                     type: array,
@@ -1344,7 +1355,7 @@ paths:
                   }
       responses:
         "200":
-          description: Note type updated (not yet implemented)
+          description: Note type updated
           content:
             application/json:
               schema:
@@ -1354,14 +1365,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [Note Types]
-      summary: Delete a note type (not yet implemented)
+      summary: Delete a note type
       operationId: deleteNoteType
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
-          description: Note type deleted (not yet implemented)
+          description: Note type deleted
           content:
             application/json:
               schema:

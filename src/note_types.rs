@@ -19,7 +19,20 @@ pub struct NoteType {
     pub id: i64,
     pub name: String,
     pub field_names: Vec<String>,
+    pub sort_field: String,
     pub templates: Vec<Template>,
+}
+
+impl NoteType {
+    /// The effective sort field: uses the configured sort_field if set,
+    /// otherwise falls back to the first field name (Anki default).
+    pub fn effective_sort_field(&self) -> &str {
+        if self.sort_field.is_empty() {
+            self.field_names.first().map(|s| s.as_str()).unwrap_or("")
+        } else {
+            &self.sort_field
+        }
+    }
 }
 
 /// A card template within a note type.
@@ -52,7 +65,7 @@ pub struct RenderedCard {
 /// Look up a note type by ID, including its templates.
 pub async fn get_note_type(db: &SqlitePool, id: i64) -> Result<NoteType, String> {
     let row = sqlx::query!(
-        "SELECT id, name, field_names, school_id FROM note_types WHERE id = ?",
+        "SELECT id, name, field_names, sort_field FROM note_types WHERE id = ?",
         id
     )
     .fetch_optional(db)
@@ -85,6 +98,7 @@ pub async fn get_note_type(db: &SqlitePool, id: i64) -> Result<NoteType, String>
         id: row.id,
         name: row.name,
         field_names,
+        sort_field: row.sort_field,
         templates,
     })
 }

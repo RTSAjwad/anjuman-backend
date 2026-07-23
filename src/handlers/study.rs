@@ -221,7 +221,8 @@ pub async fn deck_study(
         WHERE c.deck_id = ?
         ORDER BY
             CASE WHEN scs.reps = 0 THEN 0 ELSE 1 END,
-            CASE WHEN scs.due_at IS NULL THEN 0 ELSE scs.due_at END
+            CASE WHEN scs.reps = 0 THEN 0 ELSE scs.due_at END,
+            n.fields_json
         "#,
         claims.sub,
         deck_id

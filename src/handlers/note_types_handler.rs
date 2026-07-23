@@ -26,6 +26,8 @@ use crate::{
 pub struct CreateNoteType {
     pub name: String,
     pub field_names: Vec<String>,
+    #[serde(default)]
+    pub sort_field: String,
     pub templates: Vec<CreateTemplate>,
 }
 
@@ -40,6 +42,7 @@ pub struct CreateTemplate {
 pub struct UpdateNoteType {
     pub name: Option<String>,
     pub field_names: Option<Vec<String>>,
+    pub sort_field: Option<String>,
     pub templates: Option<Vec<CreateTemplate>>,
 }
 
@@ -48,6 +51,7 @@ pub struct NoteTypeResponse {
     pub id: i64,
     pub name: String,
     pub field_names: Vec<String>,
+    pub sort_field: String,
     pub templates: Vec<Template>,
 }
 
@@ -123,6 +127,7 @@ pub async fn list_note_types(
             id: nt.id,
             name: nt.name,
             field_names: nt.field_names,
+            sort_field: nt.sort_field,
             templates: nt.templates,
         })
         .collect();
@@ -144,6 +149,7 @@ pub async fn get_note_type(
         id: nt.id,
         name: nt.name,
         field_names: nt.field_names,
+        sort_field: nt.sort_field,
         templates: nt.templates,
     }))
 }
@@ -176,10 +182,11 @@ pub async fn create_note_type(
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid field names".to_string()))?;
 
     let result = sqlx::query!(
-        "INSERT INTO note_types (school_id, name, field_names, created_by, created_at) VALUES (?, ?, ?, ?, unixepoch())",
+        "INSERT INTO note_types (school_id, name, field_names, sort_field, created_by, created_at) VALUES (?, ?, ?, ?, ?, unixepoch())",
         claims.school_id,
         body.name,
         field_names_json,
+        body.sort_field,
         claims.sub
     )
     .execute(&state.db)
@@ -219,6 +226,7 @@ pub async fn create_note_type(
             id: nt.id,
             name: nt.name,
             field_names: nt.field_names,
+            sort_field: nt.sort_field,
             templates: nt.templates,
         }),
     ))
@@ -299,6 +307,22 @@ pub async fn update_note_type(
         })?;
     }
 
+    if let Some(sort_field) = &body.sort_field {
+        sqlx::query!(
+            "UPDATE note_types SET sort_field = ? WHERE id = ?",
+            sort_field,
+            id
+        )
+        .execute(&state.db)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database error".to_string(),
+            )
+        })?;
+    }
+
     if let Some(templates) = &body.templates {
         if templates.is_empty() {
             return Err((
@@ -324,6 +348,7 @@ pub async fn update_note_type(
         id: nt.id,
         name: nt.name,
         field_names: nt.field_names,
+        sort_field: nt.sort_field,
         templates: nt.templates,
     }))
 }
