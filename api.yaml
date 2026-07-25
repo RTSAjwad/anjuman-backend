@@ -398,6 +398,12 @@ components:
         reps: { type: integer, nullable: true }
         lapses: { type: integer, nullable: true }
         created_at: { type: string }
+        new_card_position:
+          {
+            type: integer,
+            nullable: true,
+            description: "Position in new card queue (1-based). Present only for new cards.",
+          }
 
     CardBrowserPage:
       type: object

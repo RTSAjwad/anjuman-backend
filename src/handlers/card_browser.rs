@@ -51,6 +51,9 @@ pub struct CardBrowserResponse {
     pub reps: Option<i64>,
     pub lapses: Option<i64>,
     pub created_at: String,
+    /// Position in the new card queue (1-based). Null for non-new cards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_card_position: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -65,8 +68,10 @@ pub struct CardBrowserPage {
 async fn rows_to_responses(
     db: &sqlx::SqlitePool,
     rows: Vec<CardBrowserRow>,
+    new_card_offset: i64,
 ) -> Result<Vec<CardBrowserResponse>, StatusCode> {
     let mut cards = Vec::new();
+    let mut new_pos = new_card_offset;
     for r in rows {
         let fields: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(&r.fields_json).unwrap_or_default();
@@ -81,6 +86,14 @@ async fn rows_to_responses(
                 front: "(unknown)".to_string(),
                 back: String::new(),
             });
+
+        let is_new = r.state.as_deref() == Some("new") || r.reps == 0;
+        let new_card_position = if is_new {
+            new_pos += 1;
+            Some(new_pos)
+        } else {
+            None
+        };
 
         cards.push(CardBrowserResponse {
             card_id: r.card_id,
@@ -99,6 +112,7 @@ async fn rows_to_responses(
             reps: Some(r.reps),
             lapses: Some(r.lapses),
             created_at: r.created_at,
+            new_card_position,
         });
     }
     Ok(cards)
@@ -166,7 +180,31 @@ pub async fn browse_cards(
         (total, rows)
     };
 
-    let cards = rows_to_responses(&state.db, rows)
+    // Count new cards before this page for position numbering.
+    let new_card_offset = if let Some(first) = rows.first() {
+        let count_sql = if has_deck && has_q {
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND c.deck_id = ? AND n.fields_json LIKE ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
+            ).bind(student_id).bind(school_id).bind(params.deck_id).bind(&pattern).bind(&first.created_at).fetch_one(&state.db).await
+        } else if has_deck {
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND c.deck_id = ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
+            ).bind(student_id).bind(school_id).bind(params.deck_id).bind(&first.created_at).fetch_one(&state.db).await
+        } else if has_q {
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND n.fields_json LIKE ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
+            ).bind(student_id).bind(school_id).bind(&pattern).bind(&first.created_at).fetch_one(&state.db).await
+        } else {
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
+            ).bind(student_id).bind(school_id).bind(&first.created_at).fetch_one(&state.db).await
+        }.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+        count_sql
+    } else {
+        0i64
+    };
+
+    let cards = rows_to_responses(&state.db, rows, new_card_offset)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
