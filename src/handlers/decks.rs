@@ -47,8 +47,20 @@ pub struct CreateDeck {
 #[derive(Deserialize)]
 pub struct UpdateDeck {
     pub title: Option<String>,
-    /// Move the deck to a new parent. Set to null to make it a root deck.
+    /// Move the deck to a new parent. Omit the field to leave parent unchanged.
+    /// Include with any value (even null) to move the deck — null means root.
+    #[serde(default, deserialize_with = "deserialize_some_option")]
     pub parent_id: Option<Option<i64>>,
+}
+
+/// Custom deserializer that treats an explicit JSON null as `Some(None)`
+/// rather than the default `None`. This lets us distinguish "field not present"
+/// from "field explicitly set to null".
+fn deserialize_some_option<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 #[derive(Deserialize)]
