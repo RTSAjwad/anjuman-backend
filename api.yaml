@@ -1531,6 +1531,13 @@ paths:
             description: "Filter by deck",
           }
         - {
+            name: note_type_id,
+            in: query,
+            required: false,
+            schema: { type: integer },
+            description: "Filter by note type",
+          }
+        - {
             name: q,
             in: query,
             required: false,

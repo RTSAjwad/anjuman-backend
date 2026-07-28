@@ -1,6 +1,6 @@
 // Card browser handler.
 //
-// GET /cards?deck_id=1&state=review&q=DNA&sort=created_at&page=1&per_page=50
+// GET /cards?deck_id=1&note_type_id=2&state=review&q=DNA&sort=created_at&page=1&per_page=50
 
 use axum::{
     Json,
@@ -14,6 +14,7 @@ use crate::{auth::AuthUser, note_types, state::AppState};
 #[derive(Deserialize)]
 pub struct CardBrowserQuery {
     pub deck_id: Option<i64>,
+    pub note_type_id: Option<i64>,
     pub q: Option<String>,
     pub state: Option<String>,
     #[serde(default = "default_sort")]
@@ -146,6 +147,10 @@ pub async fn browse_cards(
         .deck_id
         .map(|id| format!("AND c.deck_id = {}", id))
         .unwrap_or_default();
+    let note_type_filter = params
+        .note_type_id
+        .map(|id| format!("AND n.note_type_id = {}", id))
+        .unwrap_or_default();
     let q_filter = params
         .q
         .as_ref()
@@ -157,8 +162,8 @@ pub async fn browse_cards(
 
     let base_from = "FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = $1";
     let base_where = format!(
-        "WHERE d.school_id = $2 {} {} {}",
-        deck_filter, q_filter, state_filter
+        "WHERE d.school_id = $2 {} {} {} {}",
+        deck_filter, note_type_filter, q_filter, state_filter
     );
 
     // Count
