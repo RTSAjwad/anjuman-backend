@@ -53,6 +53,7 @@ pub struct NoteTypeResponse {
     pub field_names: Vec<String>,
     pub sort_field: String,
     pub templates: Vec<Template>,
+    pub note_count: i64,
 }
 
 #[derive(Serialize)]
@@ -121,18 +122,26 @@ pub async fn list_note_types(
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
-    let response: Vec<NoteTypeResponse> = types
-        .into_iter()
-        .map(|nt| NoteTypeResponse {
+    let mut responses = Vec::new();
+    for nt in types {
+        let count: i64 = sqlx::query_scalar!(
+            "SELECT COUNT(*) as \"count!: i64\" FROM notes WHERE note_type_id = ?",
+            nt.id
+        )
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+        responses.push(NoteTypeResponse {
             id: nt.id,
             name: nt.name,
             field_names: nt.field_names,
             sort_field: nt.sort_field,
             templates: nt.templates,
-        })
-        .collect();
+            note_count: count,
+        });
+    }
 
-    Ok(Json(response))
+    Ok(Json(responses))
 }
 
 /// `GET /note-types/{id}` — Get a single note type.
@@ -151,6 +160,7 @@ pub async fn get_note_type(
         field_names: nt.field_names,
         sort_field: nt.sort_field,
         templates: nt.templates,
+        note_count: 0,
     }))
 }
 
@@ -228,6 +238,7 @@ pub async fn create_note_type(
             field_names: nt.field_names,
             sort_field: nt.sort_field,
             templates: nt.templates,
+            note_count: 0,
         }),
     ))
 }
@@ -350,6 +361,7 @@ pub async fn update_note_type(
         field_names: nt.field_names,
         sort_field: nt.sort_field,
         templates: nt.templates,
+        note_count: 0,
     }))
 }
 

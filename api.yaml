@@ -260,6 +260,11 @@ components:
           }
         templates:
           { type: array, items: { $ref: "#/components/schemas/Template" } }
+        note_count:
+          {
+            type: integer,
+            description: "Number of notes using this type. 0 means it can be safely deleted.",
+          }
     Template:
       type: object
       properties:
