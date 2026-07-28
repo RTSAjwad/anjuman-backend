@@ -1,0 +1,10 @@
+DELETE FROM cards WHERE id BETWEEN 1 AND 10;
+DELETE FROM notes WHERE id BETWEEN 1 AND 10;
+DELETE FROM deck_classes WHERE deck_id = 1;
+DELETE FROM decks WHERE id = 1;
+DELETE FROM note_type_templates WHERE note_type_id = 1;
+DELETE FROM note_types WHERE id = 1;
+DELETE FROM class_members WHERE class_id = 1;
+DELETE FROM classes WHERE id = 1;
+DELETE FROM users WHERE id IN (1, 2, 3);
+DELETE FROM schools WHERE id = 1;

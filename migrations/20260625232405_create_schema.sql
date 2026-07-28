@@ -47,6 +47,8 @@ CREATE TABLE classes (
     name TEXT NOT NULL,
     description TEXT,
 
+    archived INTEGER NOT NULL DEFAULT 0,
+
     created_by INTEGER NOT NULL,
 
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
