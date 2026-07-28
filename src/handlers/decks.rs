@@ -25,7 +25,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -40,11 +40,22 @@ use crate::{auth::AuthUser, handlers::users::UserRole, state::AppState};
 pub struct CreateDeck {
     pub title: String,
     pub description: Option<String>,
+    /// Optional parent deck for nesting. The parent must exist in the same school.
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
-pub struct RenameDeck {
-    pub title: String,
+pub struct UpdateDeck {
+    pub title: Option<String>,
+    /// Move the deck to a new parent. Set to null to make it a root deck.
+    pub parent_id: Option<Option<i64>>,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteDeckQuery {
+    /// If true, also delete all descendant decks recursively.
+    #[serde(default)]
+    pub cascade: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +85,7 @@ pub struct DeckResponse {
     pub owner_email: String,
     pub owner_first_name: String,
     pub owner_last_name: String,
+    pub parent_id: Option<i64>,
     pub created_at: String,
     /// Card counts for the requesting student. Present only in list_decks.
     /// Not populated in get_deck, create_deck, etc.
@@ -283,7 +295,7 @@ async fn fetch_deck(
     let row = sqlx::query!(
         r#"
         SELECT d.id, d.school_id, d.title, d.description,
-               d.created_by, d.created_at,
+               d.created_by, d.parent_id, d.created_at,
                u.email as owner_email,
                u.first_name as owner_first_name,
                u.last_name as owner_last_name
@@ -306,6 +318,7 @@ async fn fetch_deck(
         owner_email: row.owner_email,
         owner_first_name: row.owner_first_name,
         owner_last_name: row.owner_last_name,
+        parent_id: row.parent_id,
         created_at: row.created_at,
         new_count: None,
         learning_count: None,
@@ -327,14 +340,30 @@ pub async fn create_deck(
 ) -> Result<(StatusCode, Json<DeckResponse>), (StatusCode, &'static str)> {
     check_teacher_or_admin(&claims)?;
 
+    // Validate parent exists in same school if provided.
+    if let Some(parent_id) = body.parent_id {
+        let parent = sqlx::query!(
+            "SELECT id FROM decks WHERE id = ? AND school_id = ?",
+            parent_id,
+            claims.school_id
+        )
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+        if parent.is_none() {
+            return Err((StatusCode::BAD_REQUEST, "Parent deck not found"));
+        }
+    }
+
     let result = sqlx::query!(
         r#"
-        INSERT INTO decks (school_id, title, description, created_by, created_at)
-        VALUES (?, ?, ?, ?, unixepoch())
+        INSERT INTO decks (school_id, title, description, parent_id, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, unixepoch())
         "#,
         claims.school_id,
         body.title,
         body.description,
+        body.parent_id,
         claims.sub
     )
     .execute(&state.db)
@@ -345,46 +374,134 @@ pub async fn create_deck(
     Ok((StatusCode::CREATED, Json(deck)))
 }
 
-/// `PATCH /decks/:id/rename` — Rename a deck.
+/// `PATCH /decks/:id/rename` — Rename or move a deck.
+///
+/// If `parent_id` is provided, the deck is moved to a new parent.
+/// Set `parent_id: null` to make it a root deck.
+/// Cycle detection prevents a deck from becoming its own ancestor.
 pub async fn rename_deck(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(deck_id): Path<i64>,
-    Json(body): Json<RenameDeck>,
+    Json(body): Json<UpdateDeck>,
 ) -> Result<Json<DeckResponse>, (StatusCode, &'static str)> {
     check_teacher_or_admin(&claims)?;
     check_deck_collaborator(&state.db, deck_id, claims.school_id, &claims).await?;
 
-    sqlx::query!(
-        "UPDATE decks SET title = ? WHERE id = ?",
-        body.title,
-        deck_id
-    )
-    .execute(&state.db)
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    if let Some(title) = &body.title {
+        if title.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, "Title cannot be empty"));
+        }
+        sqlx::query!("UPDATE decks SET title = ? WHERE id = ?", title, deck_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    }
+
+    if let Some(parent_id) = body.parent_id {
+        // If moving to a parent, validate it exists and check for cycles.
+        if let Some(pid) = parent_id {
+            let parent = sqlx::query!(
+                "SELECT id FROM decks WHERE id = ? AND school_id = ?",
+                pid,
+                claims.school_id
+            )
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+            .ok_or((StatusCode::BAD_REQUEST, "Parent deck not found"))?;
+
+            // Cycle detection: walk up from the proposed parent to check
+            // we don't encounter `deck_id` (which would mean deck_id is an
+            // ancestor of the proposed parent — a cycle).
+            let mut current = parent.id;
+            loop {
+                if current == deck_id {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "Cannot move a deck under one of its own descendants",
+                    ));
+                }
+                let next = sqlx::query_scalar!("SELECT parent_id FROM decks WHERE id = ?", current)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+                match next {
+                    Some(Some(n)) => current = n,
+                    _ => break,
+                }
+            }
+        }
+
+        sqlx::query!(
+            "UPDATE decks SET parent_id = ? WHERE id = ?",
+            parent_id,
+            deck_id
+        )
+        .execute(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    }
 
     let deck = fetch_deck(&state.db, deck_id).await?;
     Ok(Json(deck))
 }
 
 /// `DELETE /decks/:id` — Delete a deck permanently.
+///
+/// Query parameter `cascade=true` also deletes all child decks recursively.
+/// Without it, children become root decks (their parent_id is set to NULL).
 pub async fn delete_deck(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(deck_id): Path<i64>,
+    Query(params): Query<DeleteDeckQuery>,
 ) -> Result<Json<MessageResponse>, (StatusCode, &'static str)> {
     check_teacher_or_admin(&claims)?;
     check_deck_owner(&state.db, deck_id, claims.school_id, &claims).await?;
 
-    sqlx::query!("DELETE FROM decks WHERE id = ?", deck_id)
+    if params.cascade.unwrap_or(false) {
+        // Delete the deck and all descendant decks via recursive CTE.
+        sqlx::query!(
+            r#"
+            DELETE FROM decks
+            WHERE id IN (
+                WITH RECURSIVE subtree(id) AS (
+                    SELECT ?
+                    UNION ALL
+                    SELECT d.id FROM decks d JOIN subtree s ON d.parent_id = s.id
+                )
+                SELECT id FROM subtree
+            )
+            "#,
+            deck_id
+        )
         .execute(&state.db)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
-    Ok(Json(MessageResponse {
-        message: "Deck deleted",
-    }))
+        Ok(Json(MessageResponse {
+            message: "Deck and all subdecks deleted",
+        }))
+    } else {
+        // Unparent children first, then delete the deck.
+        sqlx::query!(
+            "UPDATE decks SET parent_id = NULL WHERE parent_id = ?",
+            deck_id
+        )
+        .execute(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+        sqlx::query!("DELETE FROM decks WHERE id = ?", deck_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+        Ok(Json(MessageResponse {
+            message: "Deck deleted",
+        }))
+    }
 }
 
 /// `POST /decks/:id/duplicate` — Create a copy of an existing deck.
@@ -401,7 +518,7 @@ pub async fn duplicate_deck(
     // Fetch the source deck — must be visible to the caller.
     let source = sqlx::query!(
         r#"
-        SELECT id, title, description, created_by
+        SELECT id, title, description, parent_id, created_by
         FROM decks
         WHERE id = ? AND school_id = ?
         "#,
@@ -443,12 +560,13 @@ pub async fn duplicate_deck(
 
     let result = sqlx::query!(
         r#"
-        INSERT INTO decks (school_id, title, description, created_by, created_at)
-        VALUES (?, ?, ?, ?, unixepoch())
+        INSERT INTO decks (school_id, title, description, parent_id, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, unixepoch())
         "#,
         claims.school_id,
         new_title,
         source.description,
+        source.parent_id,
         claims.sub
     )
     .execute(&mut *tx)
@@ -895,7 +1013,7 @@ pub async fn list_decks(
         let rows = sqlx::query!(
             r#"
             SELECT d.id, d.school_id, d.title, d.description,
-                   d.created_by, d.created_at,
+                   d.created_by, d.parent_id, d.created_at,
                    u.email as owner_email,
                    u.first_name as owner_first_name,
                    u.last_name as owner_last_name,
@@ -922,6 +1040,7 @@ pub async fn list_decks(
                 owner_email: r.owner_email,
                 owner_first_name: r.owner_first_name,
                 owner_last_name: r.owner_last_name,
+                parent_id: r.parent_id,
                 created_at: r.created_at,
                 new_count: None,
                 learning_count: None,
@@ -937,7 +1056,7 @@ pub async fn list_decks(
         let rows = sqlx::query!(
             r#"
             SELECT DISTINCT d.id, d.school_id, d.title, d.description,
-                   d.created_by, d.created_at,
+                   d.created_by, d.parent_id, d.created_at,
                    u.email as owner_email,
                    u.first_name as owner_first_name,
                    u.last_name as owner_last_name,
@@ -968,6 +1087,7 @@ pub async fn list_decks(
                 owner_email: r.owner_email,
                 owner_first_name: r.owner_first_name,
                 owner_last_name: r.owner_last_name,
+                parent_id: r.parent_id,
                 created_at: r.created_at,
                 new_count: None,
                 learning_count: None,
@@ -983,7 +1103,7 @@ pub async fn list_decks(
     let rows = sqlx::query!(
         r#"
         SELECT d.id, d.school_id, d.title, d.description,
-               d.created_by, d.created_at,
+               d.created_by, d.parent_id, d.created_at,
                u.email as owner_email,
                u.first_name as owner_first_name,
                u.last_name as owner_last_name
@@ -1005,11 +1125,15 @@ pub async fn list_decks(
     for r in rows {
         let deck_id = r.id.expect("deck.id is NOT NULL in schema");
 
-        // Fetch per-state card counts for this student and deck.
-        // LEFT JOIN from cards to student_card_states so we count all cards,
-        // treating missing state rows as "new".
+        // Fetch per-state card counts for this student across the deck's subtree.
+        // Uses a recursive CTE to include cards from child decks.
         let counts = sqlx::query!(
             r#"
+            WITH RECURSIVE subtree(id) AS (
+                SELECT ?
+                UNION ALL
+                SELECT d.id FROM decks d JOIN subtree s ON d.parent_id = s.id
+            )
             SELECT
                 COUNT(*) as "total!: i64",
                 COALESCE(SUM(CASE WHEN scs.student_id IS NULL OR scs.reps = 0 THEN 1 ELSE 0 END), 0) as "new_count!: i64",
@@ -1019,10 +1143,10 @@ pub async fn list_decks(
             FROM cards c
             LEFT JOIN student_card_states scs
                 ON scs.card_id = c.id AND scs.student_id = ?
-            WHERE c.deck_id = ?
+            WHERE c.deck_id IN (SELECT id FROM subtree)
             "#,
-            claims.sub,
-            deck_id
+            deck_id,
+            claims.sub
         )
         .fetch_one(&state.db)
         .await
@@ -1037,6 +1161,7 @@ pub async fn list_decks(
             owner_email: r.owner_email,
             owner_first_name: r.owner_first_name,
             owner_last_name: r.owner_last_name,
+            parent_id: r.parent_id,
             created_at: r.created_at,
             new_count: Some(counts.new_count),
             learning_count: Some(counts.learning_count),

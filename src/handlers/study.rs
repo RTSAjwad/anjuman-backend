@@ -65,13 +65,21 @@ async fn ensure_card_states_for_deck(
     student_id: i64,
     deck_id: i64,
 ) -> Result<(), StatusCode> {
+    // Create state rows for cards in this deck AND its descendants.
     sqlx::query!(
         r#"
         INSERT OR IGNORE INTO student_card_states
             (student_id, card_id, state, stability, difficulty, reps, lapses)
         SELECT ?, c.id, 'new', 0.0, 0.0, 0, 0
         FROM cards c
-        WHERE c.deck_id = ?
+        WHERE c.deck_id IN (
+            WITH RECURSIVE subtree(id) AS (
+                SELECT ?
+                UNION ALL
+                SELECT d.id FROM decks d JOIN subtree s ON d.parent_id = s.id
+            )
+            SELECT id FROM subtree
+        )
         "#,
         student_id,
         deck_id
@@ -218,7 +226,14 @@ pub async fn deck_study(
         JOIN decks d ON d.id = c.deck_id
         JOIN student_card_states scs
             ON scs.card_id = c.id AND scs.student_id = ?
-        WHERE c.deck_id = ?
+        WHERE c.deck_id IN (
+            WITH RECURSIVE subtree(id) AS (
+                SELECT ?
+                UNION ALL
+                SELECT d2.id FROM decks d2 JOIN subtree s ON d2.parent_id = s.id
+            )
+            SELECT id FROM subtree
+        )
         ORDER BY
             CASE WHEN scs.reps = 0 THEN 0 ELSE 1 END,
             CASE WHEN scs.reps = 0 THEN 0 ELSE scs.due_at END,

@@ -190,12 +190,23 @@ components:
       properties:
         title: { type: string }
         description: { type: string }
+        parent_id:
+          {
+            type: integer,
+            nullable: true,
+            description: "Parent deck for nesting",
+          }
 
-    RenameDeck:
+    UpdateDeck:
       type: object
-      required: [title]
       properties:
-        title: { type: string }
+        title: { type: string, description: "New title" }
+        parent_id:
+          {
+            type: integer,
+            nullable: true,
+            description: "New parent deck ID (null to make root). Cycle detection prevents a deck from becoming its own ancestor.",
+          }
 
     ShareDeck:
       type: object
@@ -214,6 +225,12 @@ components:
         owner_email: { type: string }
         owner_first_name: { type: string }
         owner_last_name: { type: string }
+        parent_id:
+          {
+            type: integer,
+            nullable: true,
+            description: "Parent deck for nesting",
+          }
         created_at: { type: string }
         new_count: { type: integer }
         learning_count: { type: integer }
@@ -1023,10 +1040,18 @@ paths:
     delete:
       tags: [Decks]
       summary: Delete a deck (owner or admin)
+      description: Without `cascade`, children become root decks. With `cascade=true`, all descendant decks are deleted recursively.
       operationId: deleteDeck
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
+        - {
+            name: cascade,
+            in: query,
+            required: false,
+            schema: { type: boolean, default: false },
+            description: "If true, also delete all child decks recursively",
+          }
       responses:
         "200":
           description: Deck deleted
@@ -1041,7 +1066,8 @@ paths:
   /decks/{id}/rename:
     patch:
       tags: [Decks]
-      summary: Rename a deck (owner, collaborator, or admin)
+      summary: Rename or move a deck (owner, collaborator, or admin)
+      description: Accepts optional `title` (rename) and/or `parent_id` (move). Cycle detection prevents a deck from becoming its own ancestor.
       operationId: renameDeck
       security: [{ bearerAuth: [] }]
       parameters:
@@ -1051,14 +1077,15 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RenameDeck"
+              $ref: "#/components/schemas/UpdateDeck"
       responses:
         "200":
-          description: Deck renamed
+          description: Deck renamed or moved
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeckResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
