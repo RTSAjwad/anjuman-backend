@@ -1549,6 +1549,14 @@ paths:
               },
           }
         - {
+            name: state,
+            in: query,
+            required: false,
+            schema:
+              { type: string, enum: [new, learning, review, relearning, due] },
+            description: "Filter by card state. 'due' shows review/relearning cards past their due date.",
+          }
+        - {
             name: page,
             in: query,
             required: false,

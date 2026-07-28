@@ -1,6 +1,6 @@
 // Card browser handler.
 //
-// GET /cards?deck_id=1&q=DNA&sort=created_at&page=1&per_page=50
+// GET /cards?deck_id=1&state=review&q=DNA&sort=created_at&page=1&per_page=50
 
 use axum::{
     Json,
@@ -15,6 +15,7 @@ use crate::{auth::AuthUser, note_types, state::AppState};
 pub struct CardBrowserQuery {
     pub deck_id: Option<i64>,
     pub q: Option<String>,
+    pub state: Option<String>,
     #[serde(default = "default_sort")]
     pub sort: String,
     #[serde(default = "default_page")]
@@ -51,7 +52,6 @@ pub struct CardBrowserResponse {
     pub reps: Option<i64>,
     pub lapses: Option<i64>,
     pub created_at: String,
-    /// Position in the new card queue (1-based). Null for non-new cards.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_card_position: Option<i64>,
 }
@@ -64,7 +64,6 @@ pub struct CardBrowserPage {
     pub total: i64,
 }
 
-// Helper to render cards from rows.
 async fn rows_to_responses(
     db: &sqlx::SqlitePool,
     rows: Vec<CardBrowserRow>,
@@ -75,18 +74,15 @@ async fn rows_to_responses(
     for r in rows {
         let fields: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(&r.fields_json).unwrap_or_default();
-
         let nt = note_types::get_note_type(db, r.note_type_id)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
         let rendered = note_types::render_card(&nt.templates, r.template_index, &fields)
             .unwrap_or_else(|| note_types::RenderedCard {
                 template_index: r.template_index,
                 front: "(unknown)".to_string(),
                 back: String::new(),
             });
-
         let is_new = r.state.as_deref() == Some("new") || r.reps == 0;
         let new_card_position = if is_new {
             new_pos += 1;
@@ -94,7 +90,6 @@ async fn rows_to_responses(
         } else {
             None
         };
-
         cards.push(CardBrowserResponse {
             card_id: r.card_id,
             note_id: r.note_id,
@@ -118,6 +113,26 @@ async fn rows_to_responses(
     Ok(cards)
 }
 
+fn state_where(state: &str) -> &'static str {
+    match state {
+        "new" => "AND (scs.state = 'new' OR scs.reps = 0 OR scs.state IS NULL)",
+        "learning" => "AND scs.state = 'learning'",
+        "review" => "AND scs.state = 'review'",
+        "relearning" => "AND scs.state = 'relearning'",
+        "due" => "AND scs.state IN ('review', 'relearning') AND scs.due_at <= unixepoch()",
+        _ => "",
+    }
+}
+
+fn sort_clause(sort: &str) -> &'static str {
+    match sort {
+        "due_at" => "scs.due_at ASC NULLS LAST, c.created_at DESC",
+        "deck" => "d.title ASC, c.created_at DESC",
+        "question" => "n.fields_json ASC, c.created_at DESC",
+        _ => "c.created_at DESC",
+    }
+}
+
 pub async fn browse_cards(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
@@ -126,80 +141,63 @@ pub async fn browse_cards(
     let page = params.page.max(1);
     let per_page = params.per_page.max(1).min(100);
     let offset = (page - 1) * per_page;
-    let student_id = claims.sub;
-    let school_id = claims.school_id;
 
-    let has_deck = params.deck_id.is_some();
-    let pattern = params
+    let deck_filter = params
+        .deck_id
+        .map(|id| format!("AND c.deck_id = {}", id))
+        .unwrap_or_default();
+    let q_filter = params
         .q
         .as_ref()
-        .map(|s| format!("%{}%", s.trim()))
+        .filter(|s| !s.trim().is_empty())
+        .map(|q| format!("AND n.fields_json LIKE '%{}%'", q.trim()))
         .unwrap_or_default();
-    let has_q = !pattern.is_empty();
+    let state_filter = params.state.as_deref().map(state_where).unwrap_or("");
+    let order = sort_clause(&params.sort);
 
-    // Use separate queries per combination to keep sqlx happy.
-    let (total, rows) = if has_deck && has_q {
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id WHERE d.school_id = ? AND c.deck_id = ? AND n.fields_json LIKE ?"
-        ).bind(school_id).bind(params.deck_id).bind(&pattern).fetch_one(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    let base_from = "FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = $1";
+    let base_where = format!(
+        "WHERE d.school_id = $2 {} {} {}",
+        deck_filter, q_filter, state_filter
+    );
 
-        let rows = sqlx::query_as::<_, CardBrowserRow>(
-            "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND c.deck_id = ? AND n.fields_json LIKE ? ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
-        ).bind(student_id).bind(school_id).bind(params.deck_id).bind(&pattern).bind(per_page).bind(offset).fetch_all(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    // Count
+    let count_sql = format!("SELECT COUNT(*) {} {}", base_from, base_where);
+    let total: i64 = sqlx::query_scalar(&count_sql)
+        .bind(claims.sub)
+        .bind(claims.school_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
-        (total, rows)
-    } else if has_deck {
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id WHERE d.school_id = ? AND c.deck_id = ?"
-        ).bind(school_id).bind(params.deck_id).fetch_one(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    // Fetch
+    let fetch_sql = format!(
+        "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses {} {} ORDER BY {} LIMIT {} OFFSET {}",
+        base_from, base_where, order, per_page, offset
+    );
 
-        let rows = sqlx::query_as::<_, CardBrowserRow>(
-            "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND c.deck_id = ? ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
-        ).bind(student_id).bind(school_id).bind(params.deck_id).bind(per_page).bind(offset).fetch_all(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    let rows: Vec<CardBrowserRow> = sqlx::query_as(&fetch_sql)
+        .bind(claims.sub)
+        .bind(claims.school_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
-        (total, rows)
-    } else if has_q {
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id WHERE d.school_id = ? AND n.fields_json LIKE ?"
-        ).bind(school_id).bind(&pattern).fetch_one(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
-
-        let rows = sqlx::query_as::<_, CardBrowserRow>(
-            "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND n.fields_json LIKE ? ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
-        ).bind(student_id).bind(school_id).bind(&pattern).bind(per_page).bind(offset).fetch_all(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
-
-        (total, rows)
-    } else {
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id WHERE d.school_id = ?"
-        ).bind(school_id).fetch_one(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
-
-        let rows = sqlx::query_as::<_, CardBrowserRow>(
-            "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
-        ).bind(student_id).bind(school_id).bind(per_page).bind(offset).fetch_all(&state.db).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
-
-        (total, rows)
-    };
-
-    // Count new cards before this page for position numbering.
+    // New card offset for position numbering.
+    // We build a separate WHERE that excludes the state filter — we always
+    // want to count only new cards regardless of which state the user filtered by.
     let new_card_offset = if let Some(first) = rows.first() {
-        let count_sql = if has_deck && has_q {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND c.deck_id = ? AND n.fields_json LIKE ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
-            ).bind(student_id).bind(school_id).bind(params.deck_id).bind(&pattern).bind(&first.created_at).fetch_one(&state.db).await
-        } else if has_deck {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND c.deck_id = ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
-            ).bind(student_id).bind(school_id).bind(params.deck_id).bind(&first.created_at).fetch_one(&state.db).await
-        } else if has_q {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND n.fields_json LIKE ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
-            ).bind(student_id).bind(school_id).bind(&pattern).bind(&first.created_at).fetch_one(&state.db).await
-        } else {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = ? WHERE d.school_id = ? AND (scs.state = 'new' OR scs.reps = 0) AND c.created_at > ?"
-            ).bind(student_id).bind(school_id).bind(&first.created_at).fetch_one(&state.db).await
-        }.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
-        count_sql
+        let new_where = format!("WHERE d.school_id = $2 {} {}", deck_filter, q_filter);
+        let off_sql = format!(
+            "SELECT COUNT(*) {} {} AND (scs.state = 'new' OR scs.reps = 0 OR scs.state IS NULL) AND c.created_at > '{}'",
+            base_from, new_where, first.created_at
+        );
+        sqlx::query_scalar(&off_sql)
+            .bind(claims.sub)
+            .bind(claims.school_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
     } else {
         0i64
     };
