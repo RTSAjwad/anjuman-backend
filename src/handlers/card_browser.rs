@@ -1,6 +1,11 @@
 // Card browser handler.
 //
-// GET /cards?deck_id=1&note_type_id=2&state=review&q=DNA&sort=created_at&page=1&per_page=50
+// GET /cards?deck_id=1,2&note_type_id=2,3&state=review,learning&q=DNA&sort=created_at&page=1&per_page=50
+//
+// Filters support comma-separated lists for multi-value matching:
+//   deck_id=1,2      → cards in deck 1 OR 2
+//   note_type_id=2,3  → cards of note type 2 OR 3
+//   state=new,review  → cards in 'new' OR 'review' state
 
 use axum::{
     Json,
@@ -13,10 +18,16 @@ use crate::{auth::AuthUser, note_types, state::AppState};
 
 #[derive(Deserialize)]
 pub struct CardBrowserQuery {
-    pub deck_id: Option<i64>,
-    pub note_type_id: Option<i64>,
+    /// Comma-separated deck IDs, e.g. "1,2,3"
+    #[serde(default)]
+    pub deck_id: String,
+    /// Comma-separated note type IDs, e.g. "1,2"
+    #[serde(default)]
+    pub note_type_id: String,
     pub q: Option<String>,
-    pub state: Option<String>,
+    /// Comma-separated states, e.g. "review,learning"
+    #[serde(default)]
+    pub state: String,
     #[serde(default = "default_sort")]
     pub sort: String,
     #[serde(default = "default_page")]
@@ -114,15 +125,52 @@ async fn rows_to_responses(
     Ok(cards)
 }
 
-fn state_where(state: &str) -> &'static str {
-    match state {
-        "new" => "AND (scs.state = 'new' OR scs.reps = 0 OR scs.state IS NULL)",
-        "learning" => "AND scs.state = 'learning'",
-        "review" => "AND scs.state = 'review'",
-        "relearning" => "AND scs.state = 'relearning'",
-        "due" => "AND scs.state IN ('review', 'relearning') AND scs.due_at <= unixepoch()",
-        _ => "",
+/// Build a comma-separated integer list into an `IN (...)` clause.
+/// Returns empty string if the input is empty.
+fn in_clause(column: &str, csv: &str) -> String {
+    let vals: Vec<&str> = csv
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if vals.is_empty() {
+        return String::new();
     }
+    // All values come from our own parsing of i64 strings — safe to interpolate.
+    format!("AND {} IN ({})", column, vals.join(","))
+}
+
+/// Build a WHERE fragment for comma-separated state filters.
+/// Supports: new, learning, review, relearning, due.
+fn state_where(csv: &str) -> String {
+    let states: Vec<&str> = csv
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if states.is_empty() {
+        return String::new();
+    }
+
+    let mut clauses: Vec<String> = Vec::new();
+    for state in states {
+        match state {
+            "new" => {
+                clauses.push("(scs.state = 'new' OR scs.reps = 0 OR scs.state IS NULL)".into())
+            }
+            "learning" => clauses.push("scs.state = 'learning'".into()),
+            "review" => clauses.push("scs.state = 'review'".into()),
+            "relearning" => clauses.push("scs.state = 'relearning'".into()),
+            "due" => clauses.push(
+                "(scs.state IN ('review', 'relearning') AND scs.due_at <= unixepoch())".into(),
+            ),
+            _ => {}
+        }
+    }
+    if clauses.is_empty() {
+        return String::new();
+    }
+    format!("AND ({})", clauses.join(" OR "))
 }
 
 fn sort_clause(sort: &str) -> &'static str {
@@ -143,21 +191,15 @@ pub async fn browse_cards(
     let per_page = params.per_page.max(1).min(100);
     let offset = (page - 1) * per_page;
 
-    let deck_filter = params
-        .deck_id
-        .map(|id| format!("AND c.deck_id = {}", id))
-        .unwrap_or_default();
-    let note_type_filter = params
-        .note_type_id
-        .map(|id| format!("AND n.note_type_id = {}", id))
-        .unwrap_or_default();
+    let deck_filter = in_clause("c.deck_id", &params.deck_id);
+    let note_type_filter = in_clause("n.note_type_id", &params.note_type_id);
     let q_filter = params
         .q
         .as_ref()
         .filter(|s| !s.trim().is_empty())
         .map(|q| format!("AND n.fields_json LIKE '%{}%'", q.trim()))
         .unwrap_or_default();
-    let state_filter = params.state.as_deref().map(state_where).unwrap_or("");
+    let state_filter = state_where(&params.state);
     let order = sort_clause(&params.sort);
 
     let base_from = "FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = $1";

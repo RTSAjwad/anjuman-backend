@@ -1527,15 +1527,15 @@ paths:
             name: deck_id,
             in: query,
             required: false,
-            schema: { type: integer },
-            description: "Filter by deck",
+            schema: { type: string },
+            description: "Comma-separated deck IDs (e.g. '1,2,3')",
           }
         - {
             name: note_type_id,
             in: query,
             required: false,
-            schema: { type: integer },
-            description: "Filter by note type",
+            schema: { type: string },
+            description: "Comma-separated note type IDs (e.g. '1,2')",
           }
         - {
             name: q,
@@ -1559,9 +1559,8 @@ paths:
             name: state,
             in: query,
             required: false,
-            schema:
-              { type: string, enum: [new, learning, review, relearning, due] },
-            description: "Filter by card state. 'due' shows review/relearning cards past their due date.",
+            schema: { type: string },
+            description: "Comma-separated card states (e.g. 'review,learning'). Values: new, learning, review, relearning, due. 'due' shows review/relearning cards past their due date.",
           }
         - {
             name: page,
