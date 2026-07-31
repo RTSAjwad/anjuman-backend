@@ -18,6 +18,19 @@ pub async fn connect() -> Result<SqlitePool, sqlx::Error> {
 
     SqlitePoolOptions::new()
         .max_connections(5)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                // Enable WAL mode for better concurrent read/write performance.
+                sqlx::query("PRAGMA journal_mode = WAL")
+                    .execute(conn)
+                    .await?;
+                // Enable foreign key enforcement.
+                sqlx::query("PRAGMA foreign_keys = ON")
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(&url)
         .await
 }
