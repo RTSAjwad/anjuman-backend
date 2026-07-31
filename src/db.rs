@@ -16,16 +16,16 @@ use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 pub async fn connect() -> Result<SqlitePool, sqlx::Error> {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
 
-    SqlitePoolOptions::new()
+    let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .after_connect(|conn, _meta| {
-            Box::pin(async move {
-                sqlx::query("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON")
-                    .execute(conn)
-                    .await?;
-                Ok(())
-            })
-        })
         .connect(&url)
-        .await
+        .await?;
+
+    // Set WAL mode and enable foreign keys once on the database file.
+    // These pragmas persist across all future connections.
+    sqlx::query("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await?;
+
+    Ok(pool)
 }
