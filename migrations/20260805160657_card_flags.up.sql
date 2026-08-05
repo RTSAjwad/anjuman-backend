@@ -1,0 +1,1 @@
+ALTER TABLE student_card_states ADD COLUMN flag INTEGER NOT NULL DEFAULT 0;
