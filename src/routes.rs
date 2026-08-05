@@ -47,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/cards", get(card_browser::browse_cards))
         // Reviews
         .route("/reviews", post(reviews::submit_review))
+        .route("/cards/{card_id}/flag", patch(reviews::set_flag))
         // Analytics
         // Dashboard
         .route("/dashboard", get(dashboard::dashboard))

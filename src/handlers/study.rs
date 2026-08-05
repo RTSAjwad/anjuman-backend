@@ -39,6 +39,8 @@ pub struct StudyCard {
     pub difficulty: f64,
     pub reps: i64,
     pub lapses: i64,
+    /// Anki-style card flag (0-7). 0 means no flag.
+    pub flag: i64,
     /// Which deck this card belongs to, for display context.
     pub deck_title: String,
     /// Predicted interval (in days) until next review for each rating.
@@ -160,6 +162,7 @@ async fn rows_to_study_cards(
             difficulty: c.difficulty,
             reps: c.reps,
             lapses: c.lapses,
+            flag: c.flag,
             deck_title: c.deck_title,
             predicted_interval,
         });
@@ -180,6 +183,7 @@ struct CardRow {
     difficulty: f64,
     reps: i64,
     lapses: i64,
+    flag: i64,
     deck_title: String,
 }
 
@@ -220,7 +224,7 @@ pub async fn deck_study(
         SELECT c.id, c.template_index, n.note_type_id, n.fields_json,
                scs.state, scs.due_at, scs.stability as "stability: f64",
                scs.difficulty as "difficulty: f64", scs.reps, scs.lapses,
-               d.title as deck_title
+               scs.flag as "flag: i64", d.title as deck_title
         FROM cards c
         JOIN notes n ON n.id = c.note_id
         JOIN decks d ON d.id = c.deck_id

@@ -12,7 +12,11 @@
 //  3 — Good  (recalled with acceptable effort)
 //  4 — Easy  (recalled effortlessly)
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{auth::AuthUser, state::AppState};
@@ -38,6 +42,18 @@ pub struct ReviewResponse {
     pub reps: i64,
     pub lapses: i64,
     pub interval_days: i64,
+}
+
+#[derive(Deserialize)]
+pub struct SetFlag {
+    /// Flag value 0-7. 0 clears the flag.
+    pub flag: i32,
+}
+
+#[derive(Serialize)]
+pub struct FlagResponse {
+    pub card_id: i64,
+    pub flag: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -201,5 +217,40 @@ pub async fn submit_review(
         reps: new_reps,
         lapses: new_lapses,
         interval_days,
+    }))
+}
+
+/// `PATCH /cards/:card_id/flag` — Set or clear a flag on a card.
+///
+/// Flags are per-student, per-card markers (Anki-style).
+/// Values: 0 (none), 1 (red), 2 (orange), 3 (green), 4 (blue),
+/// 5 (pink), 6 (turquoise), 7 (purple).
+pub async fn set_flag(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(card_id): Path<i64>,
+    Json(body): Json<SetFlag>,
+) -> Result<Json<FlagResponse>, (StatusCode, &'static str)> {
+    if !(0..=7).contains(&body.flag) {
+        return Err((StatusCode::BAD_REQUEST, "Flag must be between 0 and 7"));
+    }
+
+    let result = sqlx::query!(
+        "UPDATE student_card_states SET flag = ? WHERE student_id = ? AND card_id = ?",
+        body.flag,
+        claims.sub,
+        card_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    if result.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "Card state not found"));
+    }
+
+    Ok(Json(FlagResponse {
+        card_id,
+        flag: body.flag as i64,
     }))
 }
