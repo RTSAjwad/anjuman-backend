@@ -28,6 +28,9 @@ pub struct CardBrowserQuery {
     /// Comma-separated states, e.g. "review,learning"
     #[serde(default)]
     pub state: String,
+    /// Comma-separated flag values, e.g. "1,3" for red and green.
+    #[serde(default)]
+    pub flag: String,
     #[serde(default = "default_sort")]
     pub sort: String,
     #[serde(default = "default_page")]
@@ -63,6 +66,8 @@ pub struct CardBrowserResponse {
     pub difficulty: Option<f64>,
     pub reps: Option<i64>,
     pub lapses: Option<i64>,
+    /// Anki-style card flag (0-7). 0 means no flag.
+    pub flag: Option<i64>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_card_position: Option<i64>,
@@ -118,6 +123,7 @@ async fn rows_to_responses(
             difficulty: Some(r.difficulty),
             reps: Some(r.reps),
             lapses: Some(r.lapses),
+            flag: Some(r.flag),
             created_at: r.created_at,
             new_card_position,
         });
@@ -200,12 +206,13 @@ pub async fn browse_cards(
         .map(|q| format!("AND n.fields_json LIKE '%{}%'", q.trim()))
         .unwrap_or_default();
     let state_filter = state_where(&params.state);
+    let flag_filter = in_clause("scs.flag", &params.flag);
     let order = sort_clause(&params.sort);
 
     let base_from = "FROM cards c JOIN notes n ON n.id = c.note_id JOIN decks d ON d.id = c.deck_id JOIN note_types nt ON nt.id = n.note_type_id LEFT JOIN student_card_states scs ON scs.card_id = c.id AND scs.student_id = $1";
     let base_where = format!(
-        "WHERE d.school_id = $2 {} {} {} {}",
-        deck_filter, note_type_filter, q_filter, state_filter
+        "WHERE d.school_id = $2 {} {} {} {} {}",
+        deck_filter, note_type_filter, q_filter, state_filter, flag_filter
     );
 
     // Count
@@ -219,7 +226,7 @@ pub async fn browse_cards(
 
     // Fetch
     let fetch_sql = format!(
-        "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses {} {} ORDER BY {} LIMIT {} OFFSET {}",
+        "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses, scs.flag {} {} ORDER BY {} LIMIT {} OFFSET {}",
         base_from, base_where, order, per_page, offset
     );
 
@@ -278,4 +285,5 @@ struct CardBrowserRow {
     difficulty: f64,
     reps: i64,
     lapses: i64,
+    flag: i64,
 }
