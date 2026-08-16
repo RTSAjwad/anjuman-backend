@@ -7,8 +7,9 @@ use axum::{
 
 use crate::{
     handlers::{
-        admin_users, analytics, card_browser, card_mod, classes, dashboard, decks, health, login,
-        logout, me, note_types_handler, notes, reviews, search_users, study, users,
+        admin_users, analytics, card_browser, card_mod, classes, dashboard, deck_options_handler,
+        decks, health, login, logout, me, note_types_handler, notes, reviews, search_users, study,
+        users,
     },
     state::AppState,
 };
@@ -56,6 +57,27 @@ pub fn router(state: AppState) -> Router {
         .route("/cards/{card_id}/reschedule", patch(card_mod::reschedule))
         .route("/notes/{note_id}/bury", post(card_mod::bury_note))
         .route("/notes/{note_id}/suspend", post(card_mod::suspend_note))
+        // Deck options (presets)
+        .route(
+            "/deck-options",
+            get(deck_options_handler::list_deck_options),
+        )
+        .route(
+            "/deck-options",
+            post(deck_options_handler::create_deck_options),
+        )
+        .route(
+            "/deck-options/{id}",
+            get(deck_options_handler::get_deck_options),
+        )
+        .route(
+            "/deck-options/{id}",
+            patch(deck_options_handler::update_deck_options),
+        )
+        .route(
+            "/deck-options/{id}",
+            delete(deck_options_handler::delete_deck_options),
+        )
         // Analytics
         // Dashboard
         .route("/dashboard", get(dashboard::dashboard))

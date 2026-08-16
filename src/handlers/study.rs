@@ -273,12 +273,22 @@ pub async fn deck_study(
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
+    // Resolve this deck's effective step options.
+    let options = crate::deck_options::options_for_deck(&state.db, deck_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load deck options",
+            )
+        })?;
+
     Ok(Json(StudySession {
         deck_id: Some(deck.id),
         deck_title: Some(deck.title),
         steps: StudySteps {
-            learning_steps: crate::handlers::reviews::LEARNING_STEPS.to_vec(),
-            relearning_steps: crate::handlers::reviews::RELEARNING_STEPS.to_vec(),
+            learning_steps: options.learning_steps,
+            relearning_steps: options.relearning_steps,
         },
         cards,
         total_cards,

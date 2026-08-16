@@ -57,16 +57,8 @@ pub struct FlagResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Learning & relearning steps (Anki defaults)
+// Learning & relearning step parsing
 // ---------------------------------------------------------------------------
-
-/// Learning steps for new cards entering the learning phase (in seconds).
-/// Anki default of "1 10" (minutes) = [60, 600] seconds.
-pub const LEARNING_STEPS: [i64; 2] = [60, 600];
-
-/// Relearning steps for review cards that lapse (in seconds).
-/// Anki default of "10" (minutes) = [600] seconds.
-pub const RELEARNING_STEPS: [i64; 1] = [600];
 
 /// Parse an Anki-style step string into seconds.
 ///
@@ -126,12 +118,14 @@ pub async fn submit_review(
         return Err((StatusCode::BAD_REQUEST, "Rating must be between 1 and 4"));
     }
 
-    // Fetch the current scheduling state.
+    // Fetch the current scheduling state (and the card's deck).
     let current = sqlx::query!(
         r#"
-        SELECT state, stability, difficulty, last_reviewed_at, reps, lapses, step_index
-        FROM student_card_states
-        WHERE student_id = ? AND card_id = ?
+        SELECT scs.state, scs.stability, scs.difficulty, scs.last_reviewed_at,
+               scs.reps, scs.lapses, scs.step_index, c.deck_id
+        FROM student_card_states scs
+        JOIN cards c ON c.id = scs.card_id
+        WHERE scs.student_id = ? AND scs.card_id = ?
         "#,
         claims.sub,
         body.card_id
@@ -140,6 +134,19 @@ pub async fn submit_review(
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
     .ok_or((StatusCode::NOT_FOUND, "Card state not found"))?;
+
+    // Resolve this deck's effective scheduling options (preset or defaults).
+    let options = crate::deck_options::options_for_deck(&state.db, current.deck_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load deck options",
+            )
+        })?;
+    let learning_steps = &options.learning_steps;
+    let relearning_steps = &options.relearning_steps;
+    let desired_retention = options.desired_retention;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -165,10 +172,9 @@ pub async fn submit_review(
 
     // Run the FSRS scheduler.
     let fsrs = fsrs::FSRS::default();
-    let desired_retention = 0.9;
 
     let next_states = fsrs
-        .next_states(previous_memory, desired_retention, elapsed_days)
+        .next_states(previous_memory, desired_retention as f32, elapsed_days)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "FSRS scheduling failed"))?;
 
     // Choose the output based on the rating.
@@ -208,39 +214,39 @@ pub async fn submit_review(
             3 => {
                 // Good: advance one step; graduate if past last.
                 step_index += 1;
-                if step_index >= LEARNING_STEPS.len() as i64 {
+                if step_index >= learning_steps.len() as i64 {
                     new_state = "review".to_string();
                     step_index = 0;
                     due_at = now + interval_fsrs_secs;
                 } else {
                     new_state = "learning".to_string();
-                    due_at = now + LEARNING_STEPS[step_index as usize];
+                    due_at = now + learning_steps[step_index as usize];
                 }
             }
             _ => {
                 // Again or Hard: stay in learning at first step.
                 new_state = "learning".to_string();
                 step_index = 0;
-                due_at = now + LEARNING_STEPS[0];
+                due_at = now + learning_steps[0];
             }
         },
         "learning" => match body.rating {
             1 => {
                 // Again: reset to first step.
                 step_index = 0;
-                due_at = now + LEARNING_STEPS[0];
+                due_at = now + learning_steps[0];
                 new_state = "learning".to_string();
             }
             2 | 3 => {
                 // Hard or Good: advance one step; graduate if past last.
                 step_index += 1;
-                if step_index >= LEARNING_STEPS.len() as i64 {
+                if step_index >= learning_steps.len() as i64 {
                     new_state = "review".to_string();
                     step_index = 0;
                     due_at = now + interval_fsrs_secs;
                 } else {
                     new_state = "learning".to_string();
-                    due_at = now + LEARNING_STEPS[step_index as usize];
+                    due_at = now + learning_steps[step_index as usize];
                 }
             }
             _ => {
@@ -255,7 +261,7 @@ pub async fn submit_review(
                 // Again: lapse to relearning.
                 new_state = "relearning".to_string();
                 step_index = 0;
-                due_at = now + RELEARNING_STEPS[0];
+                due_at = now + relearning_steps[0];
             }
             _ => {
                 // Hard/Good/Easy: stay review.
@@ -267,19 +273,19 @@ pub async fn submit_review(
             1 => {
                 // Again: restart relearning steps.
                 step_index = 0;
-                due_at = now + RELEARNING_STEPS[0];
+                due_at = now + relearning_steps[0];
                 new_state = "relearning".to_string();
             }
             2 | 3 => {
                 // Hard or Good: advance one step; graduate if past last.
                 step_index += 1;
-                if step_index >= RELEARNING_STEPS.len() as i64 {
+                if step_index >= relearning_steps.len() as i64 {
                     new_state = "review".to_string();
                     step_index = 0;
                     due_at = now + interval_fsrs_secs;
                 } else {
                     new_state = "relearning".to_string();
-                    due_at = now + RELEARNING_STEPS[step_index as usize];
+                    due_at = now + relearning_steps[step_index as usize];
                 }
             }
             _ => {

@@ -51,6 +51,9 @@ pub struct UpdateDeck {
     /// Include with any value (even null) to move the deck — null means root.
     #[serde(default, deserialize_with = "deserialize_some_option")]
     pub parent_id: Option<Option<i64>>,
+    /// Assign a deck options preset. Omit to leave unchanged; null clears it.
+    #[serde(default, deserialize_with = "deserialize_some_option")]
+    pub options_id: Option<Option<i64>>,
 }
 
 /// Custom deserializer that treats an explicit JSON null as `Some(None)`
@@ -448,6 +451,26 @@ pub async fn rename_deck(
         sqlx::query!(
             "UPDATE decks SET parent_id = ? WHERE id = ?",
             parent_id,
+            deck_id
+        )
+        .execute(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    }
+
+    if let Some(options_id) = body.options_id {
+        // Validate the preset exists in the same school if one is provided.
+        if let Some(oid) = options_id {
+            let opt = crate::deck_options::get_options(&state.db, oid)
+                .await
+                .map_err(|_| (StatusCode::BAD_REQUEST, "Deck options not found"))?;
+            if opt.school_id != claims.school_id {
+                return Err((StatusCode::BAD_REQUEST, "Deck options not found"));
+            }
+        }
+        sqlx::query!(
+            "UPDATE decks SET options_id = ? WHERE id = ?",
+            options_id,
             deck_id
         )
         .execute(&state.db)

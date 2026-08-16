@@ -3,6 +3,7 @@
 mod app;
 mod auth;
 mod db;
+mod deck_options;
 mod handlers {
     pub mod admin_users;
     pub mod analytics;
@@ -11,6 +12,7 @@ mod handlers {
 
     pub mod classes;
     pub mod dashboard;
+    pub mod deck_options_handler;
     pub mod decks;
     pub mod health;
     pub mod login;

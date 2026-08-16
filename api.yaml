@@ -466,6 +466,52 @@ components:
         due_at: { type: integer, description: "Absolute due timestamp (Unix seconds)" }
         days: { type: integer, description: "Relative due offset in days" }
 
+    DeckOptions:
+      type: object
+      properties:
+        id: { type: integer }
+        school_id: { type: integer }
+        name: { type: string }
+        learning_steps:
+          { type: array, items: { type: integer }, description: "Learning steps in seconds" }
+        relearning_steps:
+          { type: array, items: { type: integer }, description: "Relearning steps in seconds" }
+        desired_retention: { type: number, format: double }
+        bury_new: { type: boolean }
+        bury_review: { type: boolean }
+        bury_interday: { type: boolean }
+        new_per_day: { type: integer }
+        review_per_day: { type: integer }
+
+    CreateDeckOptions:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        learning_steps:
+          { type: string, description: "Anki-style step string, e.g. '1m 10m'" }
+        relearning_steps:
+          { type: string, description: "Anki-style step string, e.g. '10m'" }
+        desired_retention: { type: number, format: double }
+        bury_new: { type: boolean }
+        bury_review: { type: boolean }
+        bury_interday: { type: boolean }
+        new_per_day: { type: integer }
+        review_per_day: { type: integer }
+
+    UpdateDeckOptions:
+      type: object
+      properties:
+        name: { type: string }
+        learning_steps: { type: string }
+        relearning_steps: { type: string }
+        desired_retention: { type: number, format: double }
+        bury_new: { type: boolean }
+        bury_review: { type: boolean }
+        bury_interday: { type: boolean }
+        new_per_day: { type: integer }
+        review_per_day: { type: integer }
+
     # -------------------------------------------------------------------
     # Card Browser
     # -------------------------------------------------------------------
@@ -1943,6 +1989,109 @@ paths:
               application/json:
                 schema:
                   $ref: "#/components/schemas/ErrorResponse"
+
+  # -----------------------------------------------------------------
+  # Deck Options (presets)
+  # -----------------------------------------------------------------
+  /deck-options:
+    get:
+      tags: [DeckOptions]
+      summary: List deck options presets in the school
+      operationId: listDeckOptions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: List of presets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DeckOptions"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [DeckOptions]
+      summary: Create a deck options preset (teacher or admin)
+      operationId: createDeckOptions
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDeckOptions"
+      responses:
+        "201":
+          description: Preset created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckOptions"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /deck-options/{id}:
+    get:
+      tags: [DeckOptions]
+      summary: Get a deck options preset
+      operationId: getDeckOptions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Preset details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckOptions"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [DeckOptions]
+      summary: Update a deck options preset (teacher or admin)
+      operationId: updateDeckOptions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDeckOptions"
+      responses:
+        "200":
+          description: Preset updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckOptions"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [DeckOptions]
+      summary: Delete a deck options preset (teacher or admin)
+      description: "Decks referencing this preset fall back to defaults."
+      operationId: deleteDeckOptions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Preset deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # -----------------------------------------------------------------
   # Analytics
