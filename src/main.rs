@@ -82,7 +82,19 @@ async fn main() {
     let state = AppState { db };
     let app = app::app(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    // Bind to 127.0.0.1 by default for security.
+    // Pass `--bind 0.0.0.0` to allow connections from other devices.
+    let args: Vec<String> = std::env::args().collect();
+    let bind_ip = args
+        .iter()
+        .position(|a| a == "--bind")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("127.0.0.1");
+
+    let addr: SocketAddr = format!("{bind_ip}:3000")
+        .parse()
+        .expect("invalid bind address");
     println!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
