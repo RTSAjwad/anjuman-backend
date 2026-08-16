@@ -31,6 +31,8 @@ use crate::{auth::AuthUser, handlers::decks, note_types, state::AppState};
 #[derive(Serialize)]
 pub struct StudyCard {
     pub card_id: i64,
+    /// The note this card was generated from (for note-level actions like bury/suspend).
+    pub note_id: i64,
     pub front: String,
     pub back: String,
     pub state: String,
@@ -167,6 +169,7 @@ async fn rows_to_study_cards(
 
         cards.push(StudyCard {
             card_id: c.id.expect("card.id is NOT NULL"),
+            note_id: c.note_id,
             front: rendered.front,
             back: rendered.back,
             state: c.state,
@@ -188,6 +191,7 @@ async fn rows_to_study_cards(
 /// A row from the card + state + note query.
 struct CardRow {
     id: Option<i64>,
+    note_id: i64,
     template_index: i64,
     note_type_id: i64,
     fields_json: String,
@@ -236,7 +240,7 @@ pub async fn deck_study(
     let rows = sqlx::query_as!(
         CardRow,
         r#"
-        SELECT c.id, c.template_index, n.note_type_id, n.fields_json,
+        SELECT c.id, c.note_id, c.template_index, n.note_type_id, n.fields_json,
                scs.state, scs.due_at, scs.stability as "stability: f64",
                scs.difficulty as "difficulty: f64", scs.reps, scs.lapses,
                scs.flag as "flag: i64", scs.step_index as "step_index: i64", d.title as deck_title

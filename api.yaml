@@ -340,6 +340,8 @@ components:
       type: object
       properties:
         card_id: { type: integer }
+        note_id:
+          { type: integer, description: "The note this card was generated from (for note-level actions)" }
         front: { type: string }
         back: { type: string }
         state: { type: string, enum: [new, learning, review, relearning] }
