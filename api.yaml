@@ -541,6 +541,18 @@ components:
             nullable: true,
             description: "Anki-style card flag 0-7. 0 = no flag.",
           }
+        suspended:
+          {
+            type: integer,
+            nullable: true,
+            description: "1 if suspended, 0 otherwise (student view only; null for teachers/admins).",
+          }
+        buried_until:
+          {
+            type: integer,
+            nullable: true,
+            description: "Unix seconds until the card reappears; null if not buried (student view only).",
+          }
         created_at: { type: string }
         new_card_position:
           {
