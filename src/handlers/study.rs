@@ -41,6 +41,9 @@ pub struct StudyCard {
     pub lapses: i64,
     /// Anki-style card flag (0-7). 0 means no flag.
     pub flag: i64,
+    /// Current position in the learning/relearning steps list (0-based).
+    /// Used with the deck's `steps` to compute exact next-step intervals.
+    pub step_index: i64,
     /// Which deck this card belongs to, for display context.
     pub deck_title: String,
     /// Predicted interval (in days) until next review for each rating.
@@ -50,9 +53,19 @@ pub struct StudyCard {
 }
 
 #[derive(Serialize)]
+pub struct StudySteps {
+    /// Learning steps for new cards entering learning (in seconds).
+    pub learning_steps: Vec<i64>,
+    /// Relearning steps for lapsed review cards (in seconds).
+    pub relearning_steps: Vec<i64>,
+}
+
+#[derive(Serialize)]
 pub struct StudySession {
     pub deck_id: Option<i64>,
     pub deck_title: Option<String>,
+    /// Deck-level learning/relearning step intervals (in seconds).
+    pub steps: StudySteps,
     pub cards: Vec<StudyCard>,
     pub total_cards: i64,
     pub reviewed_count: i64,
@@ -163,6 +176,7 @@ async fn rows_to_study_cards(
             reps: c.reps,
             lapses: c.lapses,
             flag: c.flag,
+            step_index: c.step_index,
             deck_title: c.deck_title,
             predicted_interval,
         });
@@ -184,6 +198,7 @@ struct CardRow {
     reps: i64,
     lapses: i64,
     flag: i64,
+    step_index: i64,
     deck_title: String,
 }
 
@@ -224,7 +239,7 @@ pub async fn deck_study(
         SELECT c.id, c.template_index, n.note_type_id, n.fields_json,
                scs.state, scs.due_at, scs.stability as "stability: f64",
                scs.difficulty as "difficulty: f64", scs.reps, scs.lapses,
-               scs.flag as "flag: i64", d.title as deck_title
+               scs.flag as "flag: i64", scs.step_index as "step_index: i64", d.title as deck_title
         FROM cards c
         JOIN notes n ON n.id = c.note_id
         JOIN decks d ON d.id = c.deck_id
@@ -259,6 +274,16 @@ pub async fn deck_study(
     Ok(Json(StudySession {
         deck_id: Some(deck.id),
         deck_title: Some(deck.title),
+        steps: StudySteps {
+            learning_steps: crate::handlers::reviews::LEARNING_STEPS
+                .iter()
+                .map(|m| m * 60)
+                .collect(),
+            relearning_steps: crate::handlers::reviews::RELEARNING_STEPS
+                .iter()
+                .map(|m| m * 60)
+                .collect(),
+        },
         cards,
         total_cards,
         reviewed_count,

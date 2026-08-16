@@ -350,6 +350,11 @@ components:
         lapses: { type: integer }
         flag:
           { type: integer, description: "Anki-style card flag 0-7. 0 = no flag." }
+        step_index:
+          {
+            type: integer,
+            description: "Current position in the learning/relearning steps list (0-based).",
+          }
         deck_title: { type: string }
         predicted_interval:
           type: object
@@ -366,10 +371,34 @@ components:
       properties:
         deck_id: { type: integer, nullable: true }
         deck_title: { type: string, nullable: true }
+        steps:
+          type: object
+          description: "Deck-level scheduling step intervals (in seconds)."
+          properties:
+            learning_steps:
+              {
+                type: array,
+                items: { type: integer },
+                description: "Learning steps for new cards (seconds), e.g. [60, 600].",
+              }
+            relearning_steps:
+              {
+                type: array,
+                items: { type: integer },
+                description: "Relearning steps for lapsed review cards (seconds), e.g. [600].",
+              }
         cards:
           { type: array, items: { $ref: "#/components/schemas/StudyCard" } }
         total_cards: { type: integer }
         reviewed_count: { type: integer }
+
+    StudySteps:
+      type: object
+      properties:
+        learning_steps:
+          { type: array, items: { type: integer } }
+        relearning_steps:
+          { type: array, items: { type: integer } }
 
     # -------------------------------------------------------------------
     # Reviews

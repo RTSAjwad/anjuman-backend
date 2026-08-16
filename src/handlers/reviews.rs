@@ -61,10 +61,10 @@ pub struct FlagResponse {
 // ---------------------------------------------------------------------------
 
 /// Learning steps for new cards entering the learning phase (in minutes).
-const LEARNING_STEPS: [i64; 2] = [1, 10];
+pub const LEARNING_STEPS: [i64; 2] = [1, 10];
 
 /// Relearning steps for review cards that lapse (in minutes).
-const RELEARNING_STEPS: [i64; 1] = [10];
+pub const RELEARNING_STEPS: [i64; 1] = [10];
 
 // ---------------------------------------------------------------------------
 // Handler
