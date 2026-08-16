@@ -39,7 +39,7 @@ INSERT OR IGNORE INTO note_types (id, school_id, name, field_names, sort_field, 
 VALUES (1, 1, 'Basic', '["Front","Back"]', 'Front', 1, '1700000000');
 
 INSERT OR IGNORE INTO note_type_templates (note_type_id, template_index, name, front_pattern, back_pattern)
-VALUES (1, 0, 'Card 1', '{{Front}}', '{{Front}}\n\n<hr>\n\n{{Back}}');
+VALUES (1, 0, 'Card 1', '{{Front}}', '{{Front}}<hr>{{Back}}');
 
 --------------------------------------------------------------------
 -- Deck
