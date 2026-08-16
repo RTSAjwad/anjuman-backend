@@ -1148,14 +1148,16 @@ pub async fn list_decks(
             )
             SELECT
                 COUNT(*) as "total!: i64",
-                COALESCE(SUM(CASE WHEN scs.student_id IS NULL OR scs.reps = 0 THEN 1 ELSE 0 END), 0) as "new_count!: i64",
-                COALESCE(SUM(CASE WHEN scs.state = 'learning' THEN 1 ELSE 0 END), 0) as "learning_count!: i64",
-                COALESCE(SUM(CASE WHEN scs.due_at <= unixepoch() AND scs.state IN ('review', 'relearning') THEN 1 ELSE 0 END), 0) as "due_count!: i64",
-                COALESCE(SUM(CASE WHEN scs.state = 'relearning' THEN 1 ELSE 0 END), 0) as "relearning_count!: i64"
+                COALESCE(SUM(CASE WHEN (scs.student_id IS NULL OR scs.reps = 0) AND (scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch())) THEN 1 ELSE 0 END), 0) as "new_count!: i64",
+                COALESCE(SUM(CASE WHEN scs.state = 'learning' AND scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch()) THEN 1 ELSE 0 END), 0) as "learning_count!: i64",
+                COALESCE(SUM(CASE WHEN scs.due_at <= unixepoch() AND scs.state IN ('review', 'relearning') AND scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch()) THEN 1 ELSE 0 END), 0) as "due_count!: i64",
+                COALESCE(SUM(CASE WHEN scs.state = 'relearning' AND scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch()) THEN 1 ELSE 0 END), 0) as "relearning_count!: i64"
             FROM cards c
             LEFT JOIN student_card_states scs
                 ON scs.card_id = c.id AND scs.student_id = ?
             WHERE c.deck_id IN (SELECT id FROM subtree)
+              AND (scs.suspended = 0 OR scs.suspended IS NULL)
+              AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch())
             "#,
             deck_id,
             claims.sub

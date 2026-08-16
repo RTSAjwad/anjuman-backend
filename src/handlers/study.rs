@@ -253,6 +253,8 @@ pub async fn deck_study(
             )
             SELECT id FROM subtree
         )
+          AND scs.suspended = 0
+          AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch())
         ORDER BY
             CASE WHEN scs.reps = 0 THEN 0 ELSE 1 END,
             CASE WHEN scs.reps = 0 THEN 0 ELSE scs.due_at END,

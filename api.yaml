@@ -441,6 +441,22 @@ components:
         card_id: { type: integer }
         flag: { type: integer }
 
+    CardModResponse:
+      type: object
+      properties:
+        card_id: { type: integer }
+        suspended: { type: integer, description: "1 if suspended, 0 otherwise" }
+        buried_until:
+          { type: integer, nullable: true, description: "Unix seconds until card reappears; null if not buried" }
+        due_at: { type: integer, nullable: true }
+        state: { type: string }
+
+    RescheduleBody:
+      type: object
+      properties:
+        due_at: { type: integer, description: "Absolute due timestamp (Unix seconds)" }
+        days: { type: integer, description: "Relative due offset in days" }
+
     # -------------------------------------------------------------------
     # Card Browser
     # -------------------------------------------------------------------
@@ -1734,6 +1750,134 @@ paths:
               application/json:
                 schema:
                   $ref: "#/components/schemas/FlagResponse"
+          "400": { $ref: "#/components/responses/BadRequest" }
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: Card state not found
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /cards/{cardId}/suspend:
+      post:
+        tags: [Cards]
+        summary: Suspend a card (exclude from study)
+        operationId: suspendCard
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: cardId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Card suspended
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CardModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: Card state not found
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /cards/{cardId}/unsuspend:
+      post:
+        tags: [Cards]
+        summary: Unsuspend a card
+        operationId: unsuspendCard
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: cardId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Card unsuspended
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CardModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: Card state not found
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /cards/{cardId}/bury:
+      post:
+        tags: [Cards]
+        summary: Bury a card until tomorrow
+        operationId: buryCard
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: cardId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Card buried until tomorrow
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CardModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: Card state not found
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /cards/{cardId}/unbury:
+      post:
+        tags: [Cards]
+        summary: Unbury a card immediately
+        operationId: unburyCard
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: cardId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Card unburied
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CardModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: Card state not found
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /cards/{cardId}/reschedule:
+      patch:
+        tags: [Cards]
+        summary: Manually set a card's due date
+        description: "Provide either `due_at` (Unix seconds) or `days` (relative offset)."
+        operationId: rescheduleCard
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: cardId, in: path, required: true, schema: { type: integer } }
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  due_at:
+                    { type: integer, description: "Absolute due timestamp (Unix seconds)" }
+                  days:
+                    { type: integer, description: "Relative due offset in days from now" }
+        responses:
+          "200":
+            description: Card rescheduled
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/CardModResponse"
           "400": { $ref: "#/components/responses/BadRequest" }
           "401": { $ref: "#/components/responses/Unauthorized" }
           "404":

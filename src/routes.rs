@@ -7,8 +7,8 @@ use axum::{
 
 use crate::{
     handlers::{
-        admin_users, analytics, card_browser, classes, dashboard, decks, health, login, logout, me,
-        note_types_handler, notes, reviews, search_users, study, users,
+        admin_users, analytics, card_browser, card_mod, classes, dashboard, decks, health, login,
+        logout, me, note_types_handler, notes, reviews, search_users, study, users,
     },
     state::AppState,
 };
@@ -48,6 +48,12 @@ pub fn router(state: AppState) -> Router {
         // Reviews
         .route("/reviews", post(reviews::submit_review))
         .route("/cards/{card_id}/flag", patch(reviews::set_flag))
+        // Card modification (suspend / bury / reschedule)
+        .route("/cards/{card_id}/suspend", post(card_mod::suspend))
+        .route("/cards/{card_id}/unsuspend", post(card_mod::unsuspend))
+        .route("/cards/{card_id}/bury", post(card_mod::bury))
+        .route("/cards/{card_id}/unbury", post(card_mod::unbury))
+        .route("/cards/{card_id}/reschedule", patch(card_mod::reschedule))
         // Analytics
         // Dashboard
         .route("/dashboard", get(dashboard::dashboard))

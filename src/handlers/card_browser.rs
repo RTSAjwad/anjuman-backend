@@ -68,6 +68,10 @@ pub struct CardBrowserResponse {
     pub lapses: Option<i64>,
     /// Anki-style card flag (0-7). 0 means no flag.
     pub flag: Option<i64>,
+    /// 1 if suspended, 0 otherwise (student view only).
+    pub suspended: Option<i64>,
+    /// Unix seconds until the card reappears (student view only).
+    pub buried_until: Option<i64>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_card_position: Option<i64>,
@@ -124,6 +128,8 @@ async fn rows_to_responses(
             reps: Some(r.reps),
             lapses: Some(r.lapses),
             flag: Some(r.flag),
+            suspended: Some(r.suspended),
+            buried_until: r.buried_until,
             created_at: r.created_at,
             new_card_position,
         });
@@ -226,7 +232,7 @@ pub async fn browse_cards(
 
     // Fetch
     let fetch_sql = format!(
-        "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses, scs.flag {} {} ORDER BY {} LIMIT {} OFFSET {}",
+        "SELECT c.id as card_id, c.note_id, c.deck_id, c.template_index, d.title as deck_title, n.note_type_id, nt.name as note_type_name, n.fields_json, c.created_at, scs.state, scs.due_at, scs.stability, scs.difficulty, scs.reps, scs.lapses, scs.flag, scs.suspended, scs.buried_until {} {} ORDER BY {} LIMIT {} OFFSET {}",
         base_from, base_where, order, per_page, offset
     );
 
@@ -286,4 +292,6 @@ struct CardBrowserRow {
     reps: i64,
     lapses: i64,
     flag: i64,
+    suspended: i64,
+    buried_until: Option<i64>,
 }

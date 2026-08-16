@@ -7,6 +7,7 @@ mod handlers {
     pub mod admin_users;
     pub mod analytics;
     pub mod card_browser;
+    pub mod card_mod;
 
     pub mod classes;
     pub mod dashboard;
