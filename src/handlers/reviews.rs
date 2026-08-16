@@ -57,6 +57,16 @@ pub struct FlagResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Learning & relearning steps (Anki defaults)
+// ---------------------------------------------------------------------------
+
+/// Learning steps for new cards entering the learning phase (in minutes).
+const LEARNING_STEPS: [i64; 2] = [1, 10];
+
+/// Relearning steps for review cards that lapse (in minutes).
+const RELEARNING_STEPS: [i64; 1] = [10];
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
@@ -73,7 +83,7 @@ pub async fn submit_review(
     // Fetch the current scheduling state.
     let current = sqlx::query!(
         r#"
-        SELECT state, stability, difficulty, last_reviewed_at, reps, lapses
+        SELECT state, stability, difficulty, last_reviewed_at, reps, lapses, step_index
         FROM student_card_states
         WHERE student_id = ? AND card_id = ?
         "#,
@@ -125,46 +135,119 @@ pub async fn submit_review(
     };
 
     let interval_days = next.interval.round().max(1.0) as i64;
-    // Again (rating 1): set due_at to now so the card stays in the queue
-    // across devices/sessions until the student gives a passing rating.
-    // The FSRS stability/difficulty are still saved for future scheduling.
-    let due_at = if body.rating == 1 {
-        now
-    } else {
-        now + interval_days * 86400
-    };
+    let interval_fsrs_secs = interval_days * 86400;
 
-    // Determine the new state string.
-    // Rating 1 (Again): review/relearning cards lapse to relearning.
-    // New cards stay in learning (go through learning steps like Anki).
-    let new_state = if body.rating == 1 {
-        match current.state.as_str() {
-            "review" | "relearning" => "relearning",
-            _ => "learning",
-        }
-    } else {
-        match current.state.as_str() {
-            // For new cards: graduate to review if the FSRS interval is >= 1 day.
-            // Otherwise stay in learning (matches Anki's FSRS behaviour).
-            "new" => {
-                if next.interval >= 1.0 {
-                    "review"
+    // Determine the new state, step index, and due timestamp.
+    //
+    // Learning/relearning cards follow Anki's step model:
+    //   - Steps are fixed short intervals (in minutes).
+    //   - "Good" advances one step; graduating past the last step → review.
+    //   - "Easy" graduates immediately.
+    //   - "Again" resets to the first step.
+    //   - "Hard" advances one step like "Good" (FSRS still records lower
+    //     stability, affecting future intervals after graduation).
+    // Review cards lapse back to relearning on "Again".
+    let mut step_index = current.step_index;
+    let new_state: String;
+    let due_at: i64;
+
+    match current.state.as_str() {
+        "new" => match body.rating {
+            4 => {
+                // Easy: graduate immediately.
+                new_state = "review".to_string();
+                step_index = 0;
+                due_at = now + interval_fsrs_secs;
+            }
+            3 => {
+                // Good: advance one step; graduate if past last.
+                step_index += 1;
+                if step_index >= LEARNING_STEPS.len() as i64 {
+                    new_state = "review".to_string();
+                    step_index = 0;
+                    due_at = now + interval_fsrs_secs;
                 } else {
-                    "learning"
+                    new_state = "learning".to_string();
+                    due_at = now + LEARNING_STEPS[step_index as usize] * 60;
                 }
             }
-            // Learning and relearning: only graduate to review when the
-            // FSRS interval is >= 1 day, matching Anki's graduation logic.
-            "learning" | "relearning" => {
-                if next.interval >= 1.0 {
-                    "review"
+            _ => {
+                // Again or Hard: stay in learning at first step.
+                new_state = "learning".to_string();
+                step_index = 0;
+                due_at = now + LEARNING_STEPS[0] * 60;
+            }
+        },
+        "learning" => match body.rating {
+            1 => {
+                // Again: reset to first step.
+                step_index = 0;
+                due_at = now + LEARNING_STEPS[0] * 60;
+                new_state = "learning".to_string();
+            }
+            2 | 3 => {
+                // Hard or Good: advance one step; graduate if past last.
+                step_index += 1;
+                if step_index >= LEARNING_STEPS.len() as i64 {
+                    new_state = "review".to_string();
+                    step_index = 0;
+                    due_at = now + interval_fsrs_secs;
                 } else {
-                    current.state.as_str()
+                    new_state = "learning".to_string();
+                    due_at = now + LEARNING_STEPS[step_index as usize] * 60;
                 }
             }
-            other => other,
+            _ => {
+                // Easy: graduate immediately.
+                new_state = "review".to_string();
+                step_index = 0;
+                due_at = now + interval_fsrs_secs;
+            }
+        },
+        "review" => match body.rating {
+            1 => {
+                // Again: lapse to relearning.
+                new_state = "relearning".to_string();
+                step_index = 0;
+                due_at = now + RELEARNING_STEPS[0] * 60;
+            }
+            _ => {
+                // Hard/Good/Easy: stay review.
+                new_state = "review".to_string();
+                due_at = now + interval_fsrs_secs;
+            }
+        },
+        "relearning" => match body.rating {
+            1 => {
+                // Again: restart relearning steps.
+                step_index = 0;
+                due_at = now + RELEARNING_STEPS[0] * 60;
+                new_state = "relearning".to_string();
+            }
+            2 | 3 => {
+                // Hard or Good: advance one step; graduate if past last.
+                step_index += 1;
+                if step_index >= RELEARNING_STEPS.len() as i64 {
+                    new_state = "review".to_string();
+                    step_index = 0;
+                    due_at = now + interval_fsrs_secs;
+                } else {
+                    new_state = "relearning".to_string();
+                    due_at = now + RELEARNING_STEPS[step_index as usize] * 60;
+                }
+            }
+            _ => {
+                // Easy: graduate immediately.
+                new_state = "review".to_string();
+                step_index = 0;
+                due_at = now + interval_fsrs_secs;
+            }
+        },
+        other => {
+            new_state = other.to_string();
+            due_at = now + interval_fsrs_secs;
         }
-    };
+    }
 
     let new_reps = current.reps + 1;
     let new_lapses = if body.rating == 1 {
@@ -178,12 +261,13 @@ pub async fn submit_review(
         r#"
         UPDATE student_card_states
         SET state = ?, stability = ?, difficulty = ?,
-            due_at = ?, last_reviewed_at = ?, reps = ?, lapses = ?
+            step_index = ?, due_at = ?, last_reviewed_at = ?, reps = ?, lapses = ?
         WHERE student_id = ? AND card_id = ?
         "#,
         new_state,
         next.memory.stability,
         next.memory.difficulty,
+        step_index,
         due_at,
         now,
         new_reps,
