@@ -60,11 +60,57 @@ pub struct FlagResponse {
 // Learning & relearning steps (Anki defaults)
 // ---------------------------------------------------------------------------
 
-/// Learning steps for new cards entering the learning phase (in minutes).
-pub const LEARNING_STEPS: [i64; 2] = [1, 10];
+/// Learning steps for new cards entering the learning phase (in seconds).
+/// Anki default of "1 10" (minutes) = [60, 600] seconds.
+pub const LEARNING_STEPS: [i64; 2] = [60, 600];
 
-/// Relearning steps for review cards that lapse (in minutes).
-pub const RELEARNING_STEPS: [i64; 1] = [10];
+/// Relearning steps for review cards that lapse (in seconds).
+/// Anki default of "10" (minutes) = [600] seconds.
+pub const RELEARNING_STEPS: [i64; 1] = [600];
+
+/// Parse an Anki-style step string into seconds.
+///
+/// Supports units:
+///   - `s` = seconds, `m` = minutes, `h` = hours, `d` = days
+///   - bare numbers default to minutes (Anki convention)
+///   - decimals are allowed (e.g. `1.5d`)
+///
+/// Example: `"1m 1d"` → `[60, 86400]`.
+#[allow(dead_code)] // used once a config endpoint is added
+pub fn parse_steps(input: &str) -> Result<Vec<i64>, String> {
+    let mut steps = Vec::new();
+    for token in input.split_whitespace() {
+        // Find the split point between the numeric part and the unit suffix.
+        let split_at = token
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(token.len());
+        let (num_str, unit) = token.split_at(split_at);
+
+        let value: f64 = num_str
+            .parse()
+            .map_err(|_| format!("Invalid step value: '{token}'"))?;
+
+        let multiplier: f64 = match unit {
+            "" | "m" => 60.0,
+            "s" => 1.0,
+            "h" => 3600.0,
+            "d" => 86400.0,
+            other => return Err(format!("Unknown step unit: '{other}'")),
+        };
+
+        let seconds = (value * multiplier).round() as i64;
+        if seconds <= 0 {
+            return Err(format!("Step must be positive: '{token}'"));
+        }
+        steps.push(seconds);
+    }
+
+    if steps.is_empty() {
+        return Err("At least one step is required".to_string());
+    }
+
+    Ok(steps)
+}
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -140,7 +186,7 @@ pub async fn submit_review(
     // Determine the new state, step index, and due timestamp.
     //
     // Learning/relearning cards follow Anki's step model:
-    //   - Steps are fixed short intervals (in minutes).
+    //   - Steps are fixed intervals (in seconds).
     //   - "Good" advances one step; graduating past the last step → review.
     //   - "Easy" graduates immediately.
     //   - "Again" resets to the first step.
@@ -168,21 +214,21 @@ pub async fn submit_review(
                     due_at = now + interval_fsrs_secs;
                 } else {
                     new_state = "learning".to_string();
-                    due_at = now + LEARNING_STEPS[step_index as usize] * 60;
+                    due_at = now + LEARNING_STEPS[step_index as usize];
                 }
             }
             _ => {
                 // Again or Hard: stay in learning at first step.
                 new_state = "learning".to_string();
                 step_index = 0;
-                due_at = now + LEARNING_STEPS[0] * 60;
+                due_at = now + LEARNING_STEPS[0];
             }
         },
         "learning" => match body.rating {
             1 => {
                 // Again: reset to first step.
                 step_index = 0;
-                due_at = now + LEARNING_STEPS[0] * 60;
+                due_at = now + LEARNING_STEPS[0];
                 new_state = "learning".to_string();
             }
             2 | 3 => {
@@ -194,7 +240,7 @@ pub async fn submit_review(
                     due_at = now + interval_fsrs_secs;
                 } else {
                     new_state = "learning".to_string();
-                    due_at = now + LEARNING_STEPS[step_index as usize] * 60;
+                    due_at = now + LEARNING_STEPS[step_index as usize];
                 }
             }
             _ => {
@@ -209,7 +255,7 @@ pub async fn submit_review(
                 // Again: lapse to relearning.
                 new_state = "relearning".to_string();
                 step_index = 0;
-                due_at = now + RELEARNING_STEPS[0] * 60;
+                due_at = now + RELEARNING_STEPS[0];
             }
             _ => {
                 // Hard/Good/Easy: stay review.
@@ -221,7 +267,7 @@ pub async fn submit_review(
             1 => {
                 // Again: restart relearning steps.
                 step_index = 0;
-                due_at = now + RELEARNING_STEPS[0] * 60;
+                due_at = now + RELEARNING_STEPS[0];
                 new_state = "relearning".to_string();
             }
             2 | 3 => {
@@ -233,7 +279,7 @@ pub async fn submit_review(
                     due_at = now + interval_fsrs_secs;
                 } else {
                     new_state = "relearning".to_string();
-                    due_at = now + RELEARNING_STEPS[step_index as usize] * 60;
+                    due_at = now + RELEARNING_STEPS[step_index as usize];
                 }
             }
             _ => {

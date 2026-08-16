@@ -275,14 +275,8 @@ pub async fn deck_study(
         deck_id: Some(deck.id),
         deck_title: Some(deck.title),
         steps: StudySteps {
-            learning_steps: crate::handlers::reviews::LEARNING_STEPS
-                .iter()
-                .map(|m| m * 60)
-                .collect(),
-            relearning_steps: crate::handlers::reviews::RELEARNING_STEPS
-                .iter()
-                .map(|m| m * 60)
-                .collect(),
+            learning_steps: crate::handlers::reviews::LEARNING_STEPS.to_vec(),
+            relearning_steps: crate::handlers::reviews::RELEARNING_STEPS.to_vec(),
         },
         cards,
         total_cards,
