@@ -451,6 +451,15 @@ components:
         due_at: { type: integer, nullable: true }
         state: { type: string }
 
+    NoteModResponse:
+      type: object
+      properties:
+        note_id: { type: integer }
+        cards_affected: { type: integer, description: "Number of cards affected" }
+        suspended: { type: integer, description: "1 if suspended, 0 otherwise" }
+        buried_until:
+          { type: integer, nullable: true, description: "Unix seconds until cards reappear; null if not buried" }
+
     RescheduleBody:
       type: object
       properties:
@@ -1882,6 +1891,54 @@ paths:
           "401": { $ref: "#/components/responses/Unauthorized" }
           "404":
             description: Card state not found
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /notes/{noteId}/suspend:
+      post:
+        tags: [Cards]
+        summary: Suspend all cards belonging to a note
+        description: "Bulk suspension of every card generated from a note, for the authenticated student."
+        operationId: suspendNote
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: noteId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Note cards suspended
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NoteModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: No cards found for this note
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /notes/{noteId}/bury:
+      post:
+        tags: [Cards]
+        summary: Bury all cards belonging to a note until tomorrow
+        description: "Bulk burial of every card generated from a note, for the authenticated student."
+        operationId: buryNote
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: noteId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Note cards buried until tomorrow
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NoteModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: No cards found for this note
             content:
               application/json:
                 schema:

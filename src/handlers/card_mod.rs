@@ -38,6 +38,16 @@ pub struct CardModResponse {
     pub state: String,
 }
 
+#[derive(Serialize)]
+pub struct NoteModResponse {
+    pub note_id: i64,
+    pub cards_affected: i64,
+    /// 1 if suspended, 0 otherwise (suspend operation).
+    pub suspended: i64,
+    /// Unix seconds until cards reappear; null if not buried (bury operation).
+    pub buried_until: Option<i64>,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -245,5 +255,70 @@ pub async fn reschedule(
         buried_until,
         due_at,
         state,
+    }))
+}
+
+/// `POST /notes/:note_id/suspend` — Suspend all cards belonging to a note.
+///
+/// Bulk operation: applies `suspended = 1` to every card of the note for the
+/// authenticated student. Affects only the student's own scheduling state.
+pub async fn suspend_note(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(note_id): Path<i64>,
+) -> Result<Json<NoteModResponse>, (StatusCode, &'static str)> {
+    let result = sqlx::query!(
+        "UPDATE student_card_states SET suspended = 1 WHERE student_id = ? AND card_id IN (SELECT id FROM cards WHERE note_id = ?)",
+        claims.sub,
+        note_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    let affected = result.rows_affected();
+    if affected == 0 {
+        return Err((StatusCode::NOT_FOUND, "No cards found for this note"));
+    }
+
+    Ok(Json(NoteModResponse {
+        note_id,
+        cards_affected: affected as i64,
+        suspended: 1,
+        buried_until: None,
+    }))
+}
+
+/// `POST /notes/:note_id/bury` — Bury all cards belonging to a note until tomorrow.
+///
+/// Bulk operation: applies `buried_until = start_of_tomorrow` to every card of
+/// the note for the authenticated student.
+pub async fn bury_note(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(note_id): Path<i64>,
+) -> Result<Json<NoteModResponse>, (StatusCode, &'static str)> {
+    let until = start_of_tomorrow();
+
+    let result = sqlx::query!(
+        "UPDATE student_card_states SET buried_until = ? WHERE student_id = ? AND card_id IN (SELECT id FROM cards WHERE note_id = ?)",
+        until,
+        claims.sub,
+        note_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    let affected = result.rows_affected();
+    if affected == 0 {
+        return Err((StatusCode::NOT_FOUND, "No cards found for this note"));
+    }
+
+    Ok(Json(NoteModResponse {
+        note_id,
+        cards_affected: affected as i64,
+        suspended: 0,
+        buried_until: Some(until),
     }))
 }
