@@ -371,6 +371,16 @@ pub async fn set_flag(
         return Err((StatusCode::BAD_REQUEST, "Flag must be between 0 and 7"));
     }
 
+    // Ensure a state row exists so flags work on never-studied cards too.
+    sqlx::query!(
+        "INSERT OR IGNORE INTO student_card_states (student_id, card_id, state, stability, difficulty, reps, lapses) VALUES (?, ?, 'new', 0.0, 0.0, 0, 0)",
+        claims.sub,
+        card_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
     let result = sqlx::query!(
         "UPDATE student_card_states SET flag = ? WHERE student_id = ? AND card_id = ?",
         body.flag,
@@ -382,7 +392,7 @@ pub async fn set_flag(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Card state not found"));
+        return Err((StatusCode::NOT_FOUND, "Card not found"));
     }
 
     Ok(Json(FlagResponse {

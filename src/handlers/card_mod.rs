@@ -78,6 +78,28 @@ fn start_of_tomorrow() -> i64 {
     now - (now % 86400) + 86400
 }
 
+/// Ensure a `student_card_states` row exists for the given (student, card).
+///
+/// Creates a `'new'` state row if one doesn't exist yet, so per-student
+/// operations (suspend, bury, flag, reschedule) work on cards the student
+/// has never studied. Mirrors the study flow's `ensure_card_states_for_deck`.
+async fn ensure_card_state(
+    db: &sqlx::SqlitePool,
+    student_id: i64,
+    card_id: i64,
+) -> Result<(), (StatusCode, &'static str)> {
+    sqlx::query!(
+        "INSERT OR IGNORE INTO student_card_states (student_id, card_id, state, stability, difficulty, reps, lapses) VALUES (?, ?, 'new', 0.0, 0.0, 0, 0)",
+        student_id,
+        card_id
+    )
+    .execute(db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    Ok(())
+}
+
 /// Fetch the current card state for the authenticated student.
 async fn fetch_state(
     db: &sqlx::SqlitePool,
@@ -115,6 +137,30 @@ async fn fetch_note_card_ids(
     Ok(rows.into_iter().map(|r| r.card_id).collect())
 }
 
+/// Ensure `student_card_states` rows exist for every card of a note.
+async fn ensure_note_card_states(
+    db: &sqlx::SqlitePool,
+    student_id: i64,
+    note_id: i64,
+) -> Result<(), (StatusCode, &'static str)> {
+    sqlx::query!(
+        r#"
+        INSERT OR IGNORE INTO student_card_states
+            (student_id, card_id, state, stability, difficulty, reps, lapses)
+        SELECT ?, c.id, 'new', 0.0, 0.0, 0, 0
+        FROM cards c
+        WHERE c.note_id = ?
+        "#,
+        student_id,
+        note_id
+    )
+    .execute(db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -125,6 +171,8 @@ pub async fn suspend(
     State(state): State<AppState>,
     Path(card_id): Path<i64>,
 ) -> Result<Json<CardModResponse>, (StatusCode, &'static str)> {
+    ensure_card_state(&state.db, claims.sub, card_id).await?;
+
     let result = sqlx::query!(
         "UPDATE student_card_states SET suspended = 1 WHERE student_id = ? AND card_id = ?",
         claims.sub,
@@ -135,7 +183,7 @@ pub async fn suspend(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Card state not found"));
+        return Err((StatusCode::NOT_FOUND, "Card not found"));
     }
 
     let (state, due_at, suspended, buried_until) =
@@ -156,6 +204,8 @@ pub async fn unsuspend(
     State(state): State<AppState>,
     Path(card_id): Path<i64>,
 ) -> Result<Json<CardModResponse>, (StatusCode, &'static str)> {
+    ensure_card_state(&state.db, claims.sub, card_id).await?;
+
     let result = sqlx::query!(
         "UPDATE student_card_states SET suspended = 0 WHERE student_id = ? AND card_id = ?",
         claims.sub,
@@ -166,7 +216,7 @@ pub async fn unsuspend(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Card state not found"));
+        return Err((StatusCode::NOT_FOUND, "Card not found"));
     }
 
     let (state, due_at, suspended, buried_until) =
@@ -188,6 +238,7 @@ pub async fn bury(
     Path(card_id): Path<i64>,
 ) -> Result<Json<CardModResponse>, (StatusCode, &'static str)> {
     let until = start_of_tomorrow();
+    ensure_card_state(&state.db, claims.sub, card_id).await?;
 
     let result = sqlx::query!(
         "UPDATE student_card_states SET buried_until = ? WHERE student_id = ? AND card_id = ?",
@@ -200,7 +251,7 @@ pub async fn bury(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Card state not found"));
+        return Err((StatusCode::NOT_FOUND, "Card not found"));
     }
 
     let (state, due_at, suspended, buried_until) =
@@ -221,6 +272,8 @@ pub async fn unbury(
     State(state): State<AppState>,
     Path(card_id): Path<i64>,
 ) -> Result<Json<CardModResponse>, (StatusCode, &'static str)> {
+    ensure_card_state(&state.db, claims.sub, card_id).await?;
+
     let result = sqlx::query!(
         "UPDATE student_card_states SET buried_until = NULL WHERE student_id = ? AND card_id = ?",
         claims.sub,
@@ -231,7 +284,7 @@ pub async fn unbury(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Card state not found"));
+        return Err((StatusCode::NOT_FOUND, "Card not found"));
     }
 
     let (state, due_at, suspended, buried_until) =
@@ -264,6 +317,8 @@ pub async fn reschedule(
         return Err((StatusCode::BAD_REQUEST, "Provide either due_at or days"));
     };
 
+    ensure_card_state(&state.db, claims.sub, card_id).await?;
+
     let result = sqlx::query!(
         "UPDATE student_card_states SET due_at = ? WHERE student_id = ? AND card_id = ?",
         new_due_at,
@@ -275,7 +330,7 @@ pub async fn reschedule(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
 
     if result.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Card state not found"));
+        return Err((StatusCode::NOT_FOUND, "Card not found"));
     }
 
     let (state, due_at, suspended, buried_until) =
@@ -299,6 +354,8 @@ pub async fn suspend_note(
     State(state): State<AppState>,
     Path(note_id): Path<i64>,
 ) -> Result<Json<NoteModResponse>, (StatusCode, &'static str)> {
+    ensure_note_card_states(&state.db, claims.sub, note_id).await?;
+
     let result = sqlx::query!(
         "UPDATE student_card_states SET suspended = 1 WHERE student_id = ? AND card_id IN (SELECT id FROM cards WHERE note_id = ?)",
         claims.sub,
@@ -334,6 +391,7 @@ pub async fn bury_note(
     Path(note_id): Path<i64>,
 ) -> Result<Json<NoteModResponse>, (StatusCode, &'static str)> {
     let until = start_of_tomorrow();
+    ensure_note_card_states(&state.db, claims.sub, note_id).await?;
 
     let result = sqlx::query!(
         "UPDATE student_card_states SET buried_until = ? WHERE student_id = ? AND card_id IN (SELECT id FROM cards WHERE note_id = ?)",
