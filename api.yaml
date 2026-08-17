@@ -548,6 +548,7 @@ components:
         front: { type: string }
         back: { type: string }
         note_type_name: { type: string }
+        note_type_id: { type: integer }
         fields: { type: object }
         state: { type: string, nullable: true }
         due_at: { type: integer, nullable: true }
