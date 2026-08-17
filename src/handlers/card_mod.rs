@@ -29,6 +29,18 @@ pub struct RescheduleBody {
     pub days: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct MoveCardBody {
+    /// The target deck to move the card into.
+    pub deck_id: i64,
+}
+
+#[derive(Serialize)]
+pub struct MoveCardResponse {
+    pub card_id: i64,
+    pub deck_id: i64,
+}
+
 #[derive(Serialize)]
 pub struct CardModResponse {
     pub card_id: i64,
@@ -42,6 +54,8 @@ pub struct CardModResponse {
 pub struct NoteModResponse {
     pub note_id: i64,
     pub cards_affected: i64,
+    /// IDs of the cards that were affected.
+    pub card_ids: Vec<i64>,
     /// 1 if suspended, 0 otherwise (suspend operation).
     pub suspended: i64,
     /// Unix seconds until cards reappear; null if not buried (bury operation).
@@ -81,6 +95,24 @@ async fn fetch_state(
     .ok_or((StatusCode::NOT_FOUND, "Card state not found"))?;
 
     Ok((row.state, row.due_at, row.suspended, row.buried_until))
+}
+
+/// Fetch the card IDs belonging to a note for the given student.
+async fn fetch_note_card_ids(
+    db: &sqlx::SqlitePool,
+    student_id: i64,
+    note_id: i64,
+) -> Result<Vec<i64>, (StatusCode, &'static str)> {
+    let rows = sqlx::query!(
+        "SELECT scs.card_id FROM student_card_states scs JOIN cards c ON c.id = scs.card_id WHERE scs.student_id = ? AND c.note_id = ? ORDER BY scs.card_id",
+        student_id,
+        note_id
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    Ok(rows.into_iter().map(|r| r.card_id).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -281,9 +313,12 @@ pub async fn suspend_note(
         return Err((StatusCode::NOT_FOUND, "No cards found for this note"));
     }
 
+    let card_ids = fetch_note_card_ids(&state.db, claims.sub, note_id).await?;
+
     Ok(Json(NoteModResponse {
         note_id,
         cards_affected: affected as i64,
+        card_ids,
         suspended: 1,
         buried_until: None,
     }))
@@ -315,10 +350,57 @@ pub async fn bury_note(
         return Err((StatusCode::NOT_FOUND, "No cards found for this note"));
     }
 
+    let card_ids = fetch_note_card_ids(&state.db, claims.sub, note_id).await?;
+
     Ok(Json(NoteModResponse {
         note_id,
         cards_affected: affected as i64,
+        card_ids,
         suspended: 0,
         buried_until: Some(until),
+    }))
+}
+
+/// `PATCH /cards/:card_id/deck` — Move a card to another deck.
+///
+/// This lets a note's cards be split across decks, matching Anki's model.
+/// The target deck must be in the same school and visible to the caller.
+pub async fn move_card(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(card_id): Path<i64>,
+    Json(body): Json<MoveCardBody>,
+) -> Result<Json<MoveCardResponse>, (StatusCode, &'static str)> {
+    // Validate the target deck exists in the same school and is accessible.
+    let deck = sqlx::query!(
+        "SELECT id FROM decks WHERE id = ? AND school_id = ?",
+        body.deck_id,
+        claims.school_id
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+    .ok_or((StatusCode::NOT_FOUND, "Deck not found"))?;
+
+    // Authorize: caller must be owner, admin, or collaborator on the target deck.
+    crate::handlers::decks::check_deck_collaborator(&state.db, deck.id, claims.school_id, &claims)
+        .await?;
+
+    let result = sqlx::query!(
+        "UPDATE cards SET deck_id = ? WHERE id = ?",
+        body.deck_id,
+        card_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    if result.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "Card not found"));
+    }
+
+    Ok(Json(MoveCardResponse {
+        card_id,
+        deck_id: body.deck_id,
     }))
 }

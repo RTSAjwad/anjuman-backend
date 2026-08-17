@@ -295,12 +295,17 @@ components:
     # -------------------------------------------------------------------
     CreateNote:
       type: object
-      required: [note_type_id, fields]
+      required: [note_type_id, fields, deck_id]
       properties:
         note_type_id:
           { type: integer, description: "ID of the note type to use" }
         fields:
           { type: object, description: 'e.g. {"Front": "...", "Back": "..."}' }
+        deck_id:
+          {
+            type: integer,
+            description: "The deck the note's generated cards go into (the selected deck)",
+          }
 
     UpdateNote:
       type: object
@@ -313,6 +318,8 @@ components:
       properties:
         id: { type: integer }
         template_index: { type: integer }
+        deck_id:
+          { type: integer, description: "The deck this card belongs to" }
         front: { type: string }
         back: { type: string }
 
@@ -320,12 +327,6 @@ components:
       type: object
       properties:
         id: { type: integer }
-        deck_ids:
-          {
-            type: array,
-            items: { type: integer },
-            description: "Deck IDs the note's cards are in",
-          }
         note_type_id: { type: integer }
         note_type_name: { type: string }
         fields: { type: object }
@@ -458,6 +459,12 @@ components:
       properties:
         note_id: { type: integer }
         cards_affected: { type: integer, description: "Number of cards affected" }
+        card_ids:
+          {
+            type: array,
+            items: { type: integer },
+            description: "IDs of the cards that were affected",
+          }
         suspended: { type: integer, description: "1 if suspended, 0 otherwise" }
         buried_until:
           { type: integer, nullable: true, description: "Unix seconds until cards reappear; null if not buried" }
@@ -467,6 +474,19 @@ components:
       properties:
         due_at: { type: integer, description: "Absolute due timestamp (Unix seconds)" }
         days: { type: integer, description: "Relative due offset in days" }
+
+    MoveCardBody:
+      type: object
+      required: [deck_id]
+      properties:
+        deck_id:
+          { type: integer, description: "The target deck to move the card into" }
+
+    MoveCardResponse:
+      type: object
+      properties:
+        card_id: { type: integer }
+        deck_id: { type: integer }
 
     DeckOptions:
       type: object
@@ -1554,16 +1574,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   # -----------------------------------------------------------------
-  # Notes (nested under decks)
+  # Notes (note-centric)
   # -----------------------------------------------------------------
-  /decks/{deckId}/notes:
+  /notes:
     post:
       tags: [Notes]
-      summary: Create a note in a deck (owner, collaborator, or admin)
+      summary: Create a note (cards go to a chosen deck)
       operationId: createNote
       security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: deckId, in: path, required: true, schema: { type: integer } }
       requestBody:
         required: true
         content:
@@ -1587,11 +1605,17 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
     get:
       tags: [Notes]
-      summary: List all notes in a deck (owner, collaborator, or admin)
+      summary: List notes (optionally filtered by deck)
       operationId: listNotes
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: deckId, in: path, required: true, schema: { type: integer } }
+        - {
+            name: deck_id,
+            in: query,
+            required: false,
+            schema: { type: integer },
+            description: "Only notes with a card in this deck",
+          }
       responses:
         "200":
           description: Notes with cards
@@ -1604,14 +1628,13 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /decks/{deckId}/notes/{noteId}:
+  /notes/{noteId}:
     get:
       tags: [Notes]
-      summary: Get a single note (owner, collaborator, or admin)
+      summary: Get a single note
       operationId: getNote
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: deckId, in: path, required: true, schema: { type: integer } }
         - { name: noteId, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
@@ -1625,12 +1648,11 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [Notes]
-      summary: Update a note's type or fields (owner, collaborator, or admin)
+      summary: Update a note's type or fields
       description: Re-renders all cards when fields or type change.
       operationId: updateNote
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: deckId, in: path, required: true, schema: { type: integer } }
         - { name: noteId, in: path, required: true, schema: { type: integer } }
       requestBody:
         required: true
@@ -1656,11 +1678,10 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [Notes]
-      summary: Delete a note and all its cards (owner, collaborator, or admin)
+      summary: Delete a note and all its cards
       operationId: deleteNote
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: deckId, in: path, required: true, schema: { type: integer } }
         - { name: noteId, in: path, required: true, schema: { type: integer } }
       responses:
         "200":
@@ -1669,6 +1690,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /cards/{cardId}/deck:
+    patch:
+      tags: [Cards]
+      summary: Move a card to another deck
+      description: "Lets a note's cards be split across decks (Anki model)."
+      operationId: moveCard
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cardId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveCardBody"
+      responses:
+        "200":
+          description: Card moved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoveCardResponse"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }

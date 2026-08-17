@@ -57,6 +57,8 @@ pub fn router(state: AppState) -> Router {
         .route("/cards/{card_id}/reschedule", patch(card_mod::reschedule))
         .route("/notes/{note_id}/bury", post(card_mod::bury_note))
         .route("/notes/{note_id}/suspend", post(card_mod::suspend_note))
+        // Move a card to another deck
+        .route("/cards/{card_id}/deck", patch(card_mod::move_card))
         // Deck options (presets)
         .route(
             "/deck-options",
@@ -116,17 +118,11 @@ pub fn router(state: AppState) -> Router {
             "/note-types/{id}",
             delete(note_types_handler::delete_note_type),
         )
-        // Notes
-        .route("/decks/{deck_id}/notes", post(notes::create_note))
-        .route("/decks/{deck_id}/notes", get(notes::list_notes))
-        .route("/decks/{deck_id}/notes/{note_id}", get(notes::get_note))
-        .route(
-            "/decks/{deck_id}/notes/{note_id}",
-            patch(notes::update_note),
-        )
-        .route(
-            "/decks/{deck_id}/notes/{note_id}",
-            delete(notes::delete_note),
-        )
+        // Notes (note-centric)
+        .route("/notes", post(notes::create_note))
+        .route("/notes", get(notes::list_notes))
+        .route("/notes/{note_id}", get(notes::get_note))
+        .route("/notes/{note_id}", patch(notes::update_note))
+        .route("/notes/{note_id}", delete(notes::delete_note))
         .with_state(state)
 }

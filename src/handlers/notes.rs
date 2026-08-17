@@ -1,16 +1,22 @@
-// Note management within a deck.
+// Note management (note-centric, matching Anki's model).
 //
-// The deck owner (and admins) can create, read, update, and delete notes.
-// Cards are rendered at display time from note type templates + note fields.
+// Notes are deck-independent content: a note belongs to a note type and holds
+// field values. Cards are generated from a note's templates and each card is
+// assigned to a deck. The same note can therefore have its cards spread across
+// multiple decks.
 //
-// When a note is created or its note type changes, card rows are created
-// or removed to match the note type's template count. The cards table
-// only stores the note-to-template link — front/back text is generated
-// on every fetch.
+//   POST   /notes          — create a note (its cards go to a chosen deck)
+//   GET    /notes          — list notes (optional ?deck_id= filter)
+//   GET    /notes/{id}     — fetch a note with its cards + decks
+//   PATCH  /notes/{id}     — update fields / note type
+//   DELETE /notes/{id}     — delete a note and all its cards
+//
+// Moving an individual card to another deck is a separate endpoint:
+//   PATCH  /cards/{id}/deck
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -31,6 +37,8 @@ use crate::{
 pub struct CreateNote {
     pub note_type_id: i64,
     pub fields: serde_json::Map<String, Value>,
+    /// The deck the note's generated cards go into (the "selected deck").
+    pub deck_id: i64,
 }
 
 #[derive(Deserialize)]
@@ -39,10 +47,15 @@ pub struct UpdateNote {
     pub fields: Option<serde_json::Map<String, Value>>,
 }
 
+#[derive(Deserialize)]
+pub struct ListNotesQuery {
+    /// Optional deck filter: only notes with at least one card in this deck.
+    pub deck_id: Option<i64>,
+}
+
 #[derive(Serialize)]
 pub struct NoteResponse {
     pub id: i64,
-    pub deck_ids: Vec<i64>,
     pub note_type_id: i64,
     pub note_type_name: String,
     pub fields: serde_json::Map<String, Value>,
@@ -54,6 +67,7 @@ pub struct NoteResponse {
 pub struct CardSummary {
     pub id: i64,
     pub template_index: i64,
+    pub deck_id: i64,
     pub front: String,
     pub back: String,
 }
@@ -61,6 +75,11 @@ pub struct CardSummary {
 #[derive(Serialize)]
 pub struct MessageResponse {
     pub message: &'static str,
+}
+
+#[derive(sqlx::FromRow)]
+struct NoteIdRow {
+    id: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,8 +96,8 @@ fn check_teacher_or_admin(claims: &crate::auth::Claims) -> Result<(), (StatusCod
     }
 }
 
-/// Synchronise card rows for a note in a deck: ensures one card row exists
-/// per template in the note type. Old extra rows are deleted.
+/// Ensure one card row exists per template for a note in a specific deck.
+/// Old extra rows (template indices >= template count) are deleted.
 async fn sync_card_rows(
     db: &sqlx::SqlitePool,
     note_id: i64,
@@ -112,7 +131,40 @@ async fn sync_card_rows(
     Ok(())
 }
 
-/// Fetch a note and render its cards at display time.
+/// Fetch the deck IDs a note's cards are in.
+async fn note_deck_ids(db: &sqlx::SqlitePool, note_id: i64) -> Result<Vec<i64>, StatusCode> {
+    let rows = sqlx::query!(
+        "SELECT DISTINCT deck_id FROM cards WHERE note_id = ?",
+        note_id
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(rows.into_iter().map(|r| r.deck_id).collect())
+}
+
+/// Require the caller to have collaborator access to every deck the note spans.
+async fn check_note_authorization(
+    db: &sqlx::SqlitePool,
+    note_id: i64,
+    school_id: i64,
+    claims: &crate::auth::Claims,
+) -> Result<(), (StatusCode, &'static str)> {
+    let deck_ids = note_deck_ids(db, note_id)
+        .await
+        .map_err(|s| (s, "Database error"))?;
+    if deck_ids.is_empty() {
+        return Ok(());
+    }
+    for deck_id in deck_ids {
+        decks::check_deck_collaborator(db, deck_id, school_id, claims).await?;
+    }
+    Ok(())
+}
+
+/// Fetch a note and render its cards at display time. Each card includes its
+/// deck_id so callers know where the note's cards live.
 async fn fetch_note_with_cards(
     db: &sqlx::SqlitePool,
     note_id: i64,
@@ -134,14 +186,12 @@ async fn fetch_note_with_cards(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let card_rows = sqlx::query!(
-        "SELECT id, deck_id, template_index FROM cards WHERE note_id = ? ORDER BY template_index",
+        "SELECT id, deck_id, template_index FROM cards WHERE note_id = ? ORDER BY deck_id, template_index",
         note_id
     )
     .fetch_all(db)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let deck_ids: Vec<i64> = card_rows.iter().map(|c| c.deck_id).collect();
 
     let card_summaries: Vec<CardSummary> = card_rows
         .into_iter()
@@ -150,6 +200,7 @@ async fn fetch_note_with_cards(
                 CardSummary {
                     id: c.id.expect("card.id is NOT NULL"),
                     template_index: c.template_index,
+                    deck_id: c.deck_id,
                     front: rendered.front,
                     back: rendered.back,
                 }
@@ -159,7 +210,6 @@ async fn fetch_note_with_cards(
 
     Ok(NoteResponse {
         id: note.id,
-        deck_ids,
         note_type_id: note.note_type_id,
         note_type_name: nt.name,
         fields,
@@ -172,14 +222,14 @@ async fn fetch_note_with_cards(
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// `POST /notes` — Create a note and place its generated cards in a deck.
 pub async fn create_note(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
-    Path(deck_id): Path<i64>,
     Json(body): Json<CreateNote>,
 ) -> Result<(StatusCode, Json<NoteResponse>), (StatusCode, String)> {
     check_teacher_or_admin(&claims).map_err(|(s, m)| (s, m.to_string()))?;
-    decks::check_deck_collaborator(&state.db, deck_id, claims.school_id, &claims)
+    decks::check_deck_collaborator(&state.db, body.deck_id, claims.school_id, &claims)
         .await
         .map_err(|(s, m)| (s, m.to_string()))?;
 
@@ -209,7 +259,7 @@ pub async fn create_note(
 
     let note_id = result.last_insert_rowid();
 
-    sync_card_rows(&state.db, note_id, deck_id, &nt)
+    sync_card_rows(&state.db, note_id, body.deck_id, &nt)
         .await
         .map_err(|s| (s, "Failed to create cards".to_string()))?;
 
@@ -220,44 +270,60 @@ pub async fn create_note(
     Ok((StatusCode::CREATED, Json(note)))
 }
 
-pub async fn get_note(
-    AuthUser(claims): AuthUser,
-    State(state): State<AppState>,
-    Path((deck_id, note_id)): Path<(i64, i64)>,
-) -> Result<Json<NoteResponse>, (StatusCode, &'static str)> {
-    check_teacher_or_admin(&claims)?;
-    decks::check_deck_visible(&state.db, deck_id, claims.school_id, &claims).await?;
-
-    let note = fetch_note_with_cards(&state.db, note_id)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
-
-    if !note.deck_ids.contains(&deck_id) {
-        return Err((StatusCode::NOT_FOUND, "Note not found in this deck"));
-    }
-
-    Ok(Json(note))
-}
-
+/// `GET /notes` — List notes (optionally filtered by deck).
 pub async fn list_notes(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
-    Path(deck_id): Path<i64>,
+    Query(params): Query<ListNotesQuery>,
 ) -> Result<Json<Vec<NoteResponse>>, (StatusCode, &'static str)> {
     check_teacher_or_admin(&claims)?;
-    decks::check_deck_visible(&state.db, deck_id, claims.school_id, &claims).await?;
 
-    let rows = sqlx::query!(
-        "SELECT DISTINCT n.id, n.created_at FROM notes n JOIN cards c ON c.note_id = n.id WHERE c.deck_id = ? ORDER BY n.created_at",
-        deck_id
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+    // Restrict to notes the caller can see. For admins: everything in school.
+    // For teachers: notes with at least one card in a deck they own/collaborate on.
+    if let Some(deck_id) = params.deck_id {
+        decks::check_deck_visible(&state.db, deck_id, claims.school_id, &claims).await?;
+    }
+
+    let rows: Vec<NoteIdRow> = if let Some(deck_id) = params.deck_id {
+        sqlx::query_as::<_, NoteIdRow>(
+            "SELECT DISTINCT n.id FROM notes n JOIN cards c ON c.note_id = n.id WHERE c.deck_id = ? ORDER BY n.id",
+        )
+        .bind(deck_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+    } else if claims.role == UserRole::Admin {
+        sqlx::query_as::<_, NoteIdRow>(
+            "SELECT DISTINCT n.id FROM notes n JOIN cards c ON c.note_id = n.id JOIN decks d ON d.id = c.deck_id WHERE d.school_id = ? ORDER BY n.id",
+        )
+        .bind(claims.school_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+    } else {
+        sqlx::query_as::<_, NoteIdRow>(
+            r#"
+            SELECT DISTINCT n.id
+            FROM notes n
+            JOIN cards c ON c.note_id = n.id
+            JOIN decks d ON d.id = c.deck_id
+            LEFT JOIN deck_collaborators dc ON dc.deck_id = d.id
+            WHERE d.school_id = ?
+              AND (d.created_by = ? OR dc.user_id = ?)
+            ORDER BY n.id
+            "#,
+        )
+        .bind(claims.school_id)
+        .bind(claims.sub)
+        .bind(claims.sub)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+    };
 
     let mut result = Vec::new();
     for n in rows {
-        let note = fetch_note_with_cards(&state.db, n.id.expect("note.id is NOT NULL"))
+        let note = fetch_note_with_cards(&state.db, n.id)
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
         result.push(note);
@@ -266,14 +332,33 @@ pub async fn list_notes(
     Ok(Json(result))
 }
 
+/// `GET /notes/{id}` — Fetch a single note.
+pub async fn get_note(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(note_id): Path<i64>,
+) -> Result<Json<NoteResponse>, (StatusCode, &'static str)> {
+    check_teacher_or_admin(&claims)?;
+
+    // Reuse note-level authorization (requires access to all decks it spans).
+    check_note_authorization(&state.db, note_id, claims.school_id, &claims).await?;
+
+    let note = fetch_note_with_cards(&state.db, note_id)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Note not found"))?;
+
+    Ok(Json(note))
+}
+
+/// `PATCH /notes/{id}` — Update a note's fields or note type.
 pub async fn update_note(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
-    Path((deck_id, note_id)): Path<(i64, i64)>,
+    Path(note_id): Path<i64>,
     Json(body): Json<UpdateNote>,
 ) -> Result<Json<NoteResponse>, (StatusCode, String)> {
     check_teacher_or_admin(&claims).map_err(|(s, m)| (s, m.to_string()))?;
-    decks::check_deck_collaborator(&state.db, deck_id, claims.school_id, &claims)
+    check_note_authorization(&state.db, note_id, claims.school_id, &claims)
         .await
         .map_err(|(s, m)| (s, m.to_string()))?;
 
@@ -327,22 +412,13 @@ pub async fn update_note(
         )
     })?;
 
-    // If the note type changed, re-sync card rows in all decks the note is in.
+    // If the note type changed, re-sync card rows in every deck the note spans.
     if new_note_type_id != existing.note_type_id {
-        let decks = sqlx::query!(
-            "SELECT DISTINCT deck_id FROM cards WHERE note_id = ?",
-            note_id
-        )
-        .fetch_all(&state.db)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Database error".to_string(),
-            )
-        })?;
-        for d in decks {
-            sync_card_rows(&state.db, note_id, d.deck_id, &nt)
+        let deck_ids = note_deck_ids(&state.db, note_id)
+            .await
+            .map_err(|s| (s, "Failed to read note decks".to_string()))?;
+        for deck_id in deck_ids {
+            sync_card_rows(&state.db, note_id, deck_id, &nt)
                 .await
                 .map_err(|s| (s, "Failed to update cards".to_string()))?;
         }
@@ -355,13 +431,14 @@ pub async fn update_note(
     Ok(Json(note))
 }
 
+/// `DELETE /notes/{id}` — Delete a note and all its cards.
 pub async fn delete_note(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
-    Path((deck_id, note_id)): Path<(i64, i64)>,
+    Path(note_id): Path<i64>,
 ) -> Result<Json<MessageResponse>, (StatusCode, &'static str)> {
     check_teacher_or_admin(&claims)?;
-    decks::check_deck_collaborator(&state.db, deck_id, claims.school_id, &claims).await?;
+    check_note_authorization(&state.db, note_id, claims.school_id, &claims).await?;
 
     let result = sqlx::query!("DELETE FROM notes WHERE id = ?", note_id)
         .execute(&state.db)
