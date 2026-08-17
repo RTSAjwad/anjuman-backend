@@ -60,6 +60,7 @@ pub struct CardBrowserResponse {
     pub back: String,
     pub note_type_name: String,
     pub note_type_id: i64,
+    pub template_name: String,
     pub fields: serde_json::Map<String, serde_json::Value>,
     pub state: Option<String>,
     pub due_at: Option<i64>,
@@ -112,6 +113,12 @@ async fn rows_to_responses(
         } else {
             None
         };
+        let template_name = nt
+            .templates
+            .iter()
+            .find(|t| t.index == r.template_index)
+            .map(|t| t.name.clone())
+            .unwrap_or_else(|| format!("Card {}", r.template_index + 1));
         cards.push(CardBrowserResponse {
             card_id: r.card_id,
             note_id: r.note_id,
@@ -122,6 +129,7 @@ async fn rows_to_responses(
             back: rendered.back,
             note_type_name: r.note_type_name,
             note_type_id: r.note_type_id,
+            template_name,
             fields,
             state: r.state,
             due_at: r.due_at,

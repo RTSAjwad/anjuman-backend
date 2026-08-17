@@ -318,6 +318,8 @@ components:
       properties:
         id: { type: integer }
         template_index: { type: integer }
+        template_name:
+          { type: string, description: "Name of the template that generated this card" }
         deck_id:
           { type: integer, description: "The deck this card belongs to" }
         front: { type: string }
@@ -549,6 +551,8 @@ components:
         back: { type: string }
         note_type_name: { type: string }
         note_type_id: { type: integer }
+        template_name:
+          { type: string, description: "Name of the template that generated this card" }
         fields: { type: object }
         state: { type: string, nullable: true }
         due_at: { type: integer, nullable: true }

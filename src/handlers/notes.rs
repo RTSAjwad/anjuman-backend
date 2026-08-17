@@ -67,6 +67,7 @@ pub struct NoteResponse {
 pub struct CardSummary {
     pub id: i64,
     pub template_index: i64,
+    pub template_name: String,
     pub deck_id: i64,
     pub front: String,
     pub back: String,
@@ -197,9 +198,16 @@ async fn fetch_note_with_cards(
         .into_iter()
         .filter_map(|c| {
             note_types::render_card(&nt.templates, c.template_index, &fields).map(|rendered| {
+                let template_name = nt
+                    .templates
+                    .iter()
+                    .find(|t| t.index == c.template_index)
+                    .map(|t| t.name.clone())
+                    .unwrap_or_else(|| format!("Card {}", c.template_index + 1));
                 CardSummary {
                     id: c.id.expect("card.id is NOT NULL"),
                     template_index: c.template_index,
+                    template_name,
                     deck_id: c.deck_id,
                     front: rendered.front,
                     back: rendered.back,
