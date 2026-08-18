@@ -161,6 +161,26 @@ async fn ensure_note_card_states(
     Ok(())
 }
 
+/// Read the actual `(suspended, buried_until)` of a note's cards after a
+/// bulk operation. All cards are set uniformly, so reading one is sufficient.
+async fn fetch_note_result_state(
+    db: &sqlx::SqlitePool,
+    student_id: i64,
+    note_id: i64,
+) -> Result<(i64, Option<i64>), (StatusCode, &'static str)> {
+    let row = sqlx::query!(
+        "SELECT scs.suspended, scs.buried_until FROM student_card_states scs JOIN cards c ON c.id = scs.card_id WHERE scs.student_id = ? AND c.note_id = ? LIMIT 1",
+        student_id,
+        note_id
+    )
+    .fetch_optional(db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+    .ok_or((StatusCode::NOT_FOUND, "No cards found for this note"))?;
+
+    Ok((row.suspended, row.buried_until))
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -371,20 +391,52 @@ pub async fn suspend_note(
     }
 
     let card_ids = fetch_note_card_ids(&state.db, claims.sub, note_id).await?;
+    let (suspended, buried_until) = fetch_note_result_state(&state.db, claims.sub, note_id).await?;
 
     Ok(Json(NoteModResponse {
         note_id,
         cards_affected: affected as i64,
         card_ids,
-        suspended: 1,
-        buried_until: None,
+        suspended,
+        buried_until,
+    }))
+}
+
+/// `POST /notes/:note_id/unsuspend` — Unsuspend all cards belonging to a note.
+pub async fn unsuspend_note(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(note_id): Path<i64>,
+) -> Result<Json<NoteModResponse>, (StatusCode, &'static str)> {
+    ensure_note_card_states(&state.db, claims.sub, note_id).await?;
+
+    let result = sqlx::query!(
+        "UPDATE student_card_states SET suspended = 0 WHERE student_id = ? AND card_id IN (SELECT id FROM cards WHERE note_id = ?)",
+        claims.sub,
+        note_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    let affected = result.rows_affected();
+    if affected == 0 {
+        return Err((StatusCode::NOT_FOUND, "No cards found for this note"));
+    }
+
+    let card_ids = fetch_note_card_ids(&state.db, claims.sub, note_id).await?;
+    let (suspended, buried_until) = fetch_note_result_state(&state.db, claims.sub, note_id).await?;
+
+    Ok(Json(NoteModResponse {
+        note_id,
+        cards_affected: affected as i64,
+        card_ids,
+        suspended,
+        buried_until,
     }))
 }
 
 /// `POST /notes/:note_id/bury` — Bury all cards belonging to a note until tomorrow.
-///
-/// Bulk operation: applies `buried_until = start_of_tomorrow` to every card of
-/// the note for the authenticated student.
 pub async fn bury_note(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
@@ -409,13 +461,48 @@ pub async fn bury_note(
     }
 
     let card_ids = fetch_note_card_ids(&state.db, claims.sub, note_id).await?;
+    let (suspended, buried_until) = fetch_note_result_state(&state.db, claims.sub, note_id).await?;
 
     Ok(Json(NoteModResponse {
         note_id,
         cards_affected: affected as i64,
         card_ids,
-        suspended: 0,
-        buried_until: Some(until),
+        suspended,
+        buried_until,
+    }))
+}
+
+/// `POST /notes/:note_id/unbury` — Unbury all cards belonging to a note.
+pub async fn unbury_note(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(note_id): Path<i64>,
+) -> Result<Json<NoteModResponse>, (StatusCode, &'static str)> {
+    ensure_note_card_states(&state.db, claims.sub, note_id).await?;
+
+    let result = sqlx::query!(
+        "UPDATE student_card_states SET buried_until = NULL WHERE student_id = ? AND card_id IN (SELECT id FROM cards WHERE note_id = ?)",
+        claims.sub,
+        note_id
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+    let affected = result.rows_affected();
+    if affected == 0 {
+        return Err((StatusCode::NOT_FOUND, "No cards found for this note"));
+    }
+
+    let card_ids = fetch_note_card_ids(&state.db, claims.sub, note_id).await?;
+    let (suspended, buried_until) = fetch_note_result_state(&state.db, claims.sub, note_id).await?;
+
+    Ok(Json(NoteModResponse {
+        note_id,
+        cards_affected: affected as i64,
+        card_ids,
+        suspended,
+        buried_until,
     }))
 }
 

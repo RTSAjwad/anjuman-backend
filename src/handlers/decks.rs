@@ -1179,8 +1179,6 @@ pub async fn list_decks(
             LEFT JOIN student_card_states scs
                 ON scs.card_id = c.id AND scs.student_id = ?
             WHERE c.deck_id IN (SELECT id FROM subtree)
-              AND (scs.suspended = 0 OR scs.suspended IS NULL)
-              AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch())
             "#,
             deck_id,
             claims.sub
@@ -1209,4 +1207,142 @@ pub async fn list_decks(
     }
 
     Ok(Json(decks))
+}
+
+// ---------------------------------------------------------------------------
+// Deck counts
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct DeckCountsQuery {
+    /// Optional: only return counts for this single deck.
+    pub deck_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct DeckCounts {
+    pub deck_id: i64,
+    pub new_count: i64,
+    pub learning_count: i64,
+    pub due_count: i64,
+    pub relearning_count: i64,
+    pub total_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct DeckCountsResponse {
+    pub decks: Vec<DeckCounts>,
+}
+
+/// `GET /decks/counts` — Lightweight per-deck card counts.
+///
+/// For students, returns per-state counts (their own scheduling state).
+/// For teachers/admins, returns only `total_count` (per-state counts are
+/// per-student and deferred).
+pub async fn deck_counts(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<DeckCountsQuery>,
+) -> Result<Json<DeckCountsResponse>, (StatusCode, &'static str)> {
+    let mut result = Vec::new();
+
+    if claims.role == UserRole::Student {
+        // Students: decks through their class memberships.
+        let rows = sqlx::query!(
+            r#"
+            SELECT DISTINCT d.id
+            FROM decks d
+            JOIN deck_classes dcl ON dcl.deck_id = d.id
+            JOIN class_members cm ON cm.class_id = dcl.class_id AND cm.user_id = ?
+            WHERE d.school_id = ?
+            "#,
+            claims.sub,
+            claims.school_id
+        )
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+        for row in rows {
+            let deck_id = row.id.expect("deck.id is NOT NULL");
+            if let Some(filter) = params.deck_id {
+                if deck_id != filter {
+                    continue;
+                }
+            }
+
+            let counts = sqlx::query!(
+                r#"
+                WITH RECURSIVE subtree(id) AS (
+                    SELECT ?
+                    UNION ALL
+                    SELECT d.id FROM decks d JOIN subtree s ON d.parent_id = s.id
+                )
+                SELECT
+                    COUNT(*) as "total!: i64",
+                    COALESCE(SUM(CASE WHEN (scs.student_id IS NULL OR scs.reps = 0) AND (scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch())) THEN 1 ELSE 0 END), 0) as "new_count!: i64",
+                    COALESCE(SUM(CASE WHEN scs.state = 'learning' AND scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch()) THEN 1 ELSE 0 END), 0) as "learning_count!: i64",
+                    COALESCE(SUM(CASE WHEN scs.due_at <= unixepoch() AND scs.state IN ('review', 'relearning') AND scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch()) THEN 1 ELSE 0 END), 0) as "due_count!: i64",
+                    COALESCE(SUM(CASE WHEN scs.state = 'relearning' AND scs.suspended = 0 AND (scs.buried_until IS NULL OR scs.buried_until <= unixepoch()) THEN 1 ELSE 0 END), 0) as "relearning_count!: i64"
+                FROM cards c
+                LEFT JOIN student_card_states scs
+                    ON scs.card_id = c.id AND scs.student_id = ?
+                WHERE c.deck_id IN (SELECT id FROM subtree)
+                "#,
+                deck_id,
+                claims.sub
+            )
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+            result.push(DeckCounts {
+                deck_id,
+                new_count: counts.new_count,
+                learning_count: counts.learning_count,
+                due_count: counts.due_count,
+                relearning_count: counts.relearning_count,
+                total_count: counts.total,
+            });
+        }
+    } else {
+        // Teacher/admin: total count only.
+        let rows = sqlx::query!(
+            r#"
+            SELECT d.id, (SELECT COUNT(*) FROM cards c WHERE c.deck_id IN (
+                WITH RECURSIVE subtree(id) AS (
+                    SELECT d.id
+                    UNION ALL
+                    SELECT x.id FROM decks x JOIN subtree s ON x.parent_id = s.id
+                )
+                SELECT id FROM subtree
+            )) as "total!: i64"
+            FROM decks d
+            WHERE d.school_id = ?
+            "#,
+            claims.school_id
+        )
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?;
+
+        for row in rows {
+            let deck_id = row.id.expect("deck.id is NOT NULL");
+            if let Some(filter) = params.deck_id {
+                if deck_id != filter {
+                    continue;
+                }
+            }
+            result.push(DeckCounts {
+                deck_id,
+                new_count: 0,
+                learning_count: 0,
+                due_count: 0,
+                relearning_count: 0,
+                total_count: row.total,
+            });
+        }
+    }
+
+    Ok(Json(DeckCountsResponse { decks: result }))
 }

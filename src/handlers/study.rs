@@ -43,6 +43,10 @@ pub struct StudyCard {
     pub lapses: i64,
     /// Anki-style card flag (0-7). 0 means no flag.
     pub flag: i64,
+    /// 1 if suspended, 0 otherwise.
+    pub suspended: i64,
+    /// Unix seconds until the card reappears; null if not buried.
+    pub buried_until: Option<i64>,
     /// Current position in the learning/relearning steps list (0-based).
     /// Used with the deck's `steps` to compute exact next-step intervals.
     pub step_index: i64,
@@ -179,6 +183,8 @@ async fn rows_to_study_cards(
             reps: c.reps,
             lapses: c.lapses,
             flag: c.flag,
+            suspended: c.suspended,
+            buried_until: c.buried_until,
             step_index: c.step_index,
             deck_title: c.deck_title,
             predicted_interval,
@@ -202,6 +208,8 @@ struct CardRow {
     reps: i64,
     lapses: i64,
     flag: i64,
+    suspended: i64,
+    buried_until: Option<i64>,
     step_index: i64,
     deck_title: String,
 }
@@ -243,7 +251,7 @@ pub async fn deck_study(
         SELECT c.id, c.note_id, c.template_index, n.note_type_id, n.fields_json,
                scs.state, scs.due_at, scs.stability as "stability: f64",
                scs.difficulty as "difficulty: f64", scs.reps, scs.lapses,
-               scs.flag as "flag: i64", scs.step_index as "step_index: i64", d.title as deck_title
+               scs.flag as "flag: i64", scs.suspended as "suspended: i64", scs.buried_until, scs.step_index as "step_index: i64", d.title as deck_title
         FROM cards c
         JOIN notes n ON n.id = c.note_id
         JOIN decks d ON d.id = c.deck_id

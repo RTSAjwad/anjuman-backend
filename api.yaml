@@ -261,6 +261,22 @@ components:
         classes:
           { type: array, items: { $ref: "#/components/schemas/ClassInfo" } }
 
+    DeckCounts:
+      type: object
+      properties:
+        deck_id: { type: integer }
+        new_count: { type: integer }
+        learning_count: { type: integer }
+        due_count: { type: integer }
+        relearning_count: { type: integer }
+        total_count: { type: integer }
+
+    DeckCountsResponse:
+      type: object
+      properties:
+        decks:
+          { type: array, items: { $ref: "#/components/schemas/DeckCounts" } }
+
     # -------------------------------------------------------------------
     # Note Types
     # -------------------------------------------------------------------
@@ -355,6 +371,14 @@ components:
         lapses: { type: integer }
         flag:
           { type: integer, description: "Anki-style card flag 0-7. 0 = no flag." }
+        suspended:
+          { type: integer, description: "1 if suspended, 0 otherwise" }
+        buried_until:
+          {
+            type: integer,
+            nullable: true,
+            description: "Unix seconds until the card reappears; null if not buried",
+          }
         step_index:
           {
             type: integer,
@@ -1177,6 +1201,30 @@ paths:
                 $ref: "#/components/schemas/DeckResponse"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /decks/counts:
+    get:
+      tags: [Decks]
+      summary: Lightweight per-deck card counts
+      description: "Students get per-state counts for their own scheduling state. Teachers/admins get total counts only."
+      operationId: deckCounts
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - {
+            name: deck_id,
+            in: query,
+            required: false,
+            schema: { type: integer },
+            description: "Only return counts for this single deck",
+          }
+      responses:
+        "200":
+          description: Deck counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeckCountsResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /decks/{id}:
     get:
@@ -2044,6 +2092,54 @@ paths:
         responses:
           "200":
             description: Note cards buried until tomorrow
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NoteModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: No cards found for this note
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /notes/{noteId}/unbury:
+      post:
+        tags: [Cards]
+        summary: Unbury all cards belonging to a note
+        description: "Bulk unburial of every card generated from a note, for the authenticated student."
+        operationId: unburyNote
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: noteId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Note cards unburied
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/NoteModResponse"
+          "401": { $ref: "#/components/responses/Unauthorized" }
+          "404":
+            description: No cards found for this note
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/ErrorResponse"
+
+    /notes/{noteId}/unsuspend:
+      post:
+        tags: [Cards]
+        summary: Unsuspend all cards belonging to a note
+        description: "Bulk unsuspension of every card generated from a note, for the authenticated student."
+        operationId: unsuspendNote
+        security: [{ bearerAuth: [] }]
+        parameters:
+          - { name: noteId, in: path, required: true, schema: { type: integer } }
+        responses:
+          "200":
+            description: Note cards unsuspended
             content:
               application/json:
                 schema:

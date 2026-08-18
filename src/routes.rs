@@ -57,6 +57,8 @@ pub fn router(state: AppState) -> Router {
         .route("/cards/{card_id}/reschedule", patch(card_mod::reschedule))
         .route("/notes/{note_id}/bury", post(card_mod::bury_note))
         .route("/notes/{note_id}/suspend", post(card_mod::suspend_note))
+        .route("/notes/{note_id}/unbury", post(card_mod::unbury_note))
+        .route("/notes/{note_id}/unsuspend", post(card_mod::unsuspend_note))
         // Move a card to another deck
         .route("/cards/{card_id}/deck", patch(card_mod::move_card))
         // Deck options (presets)
@@ -93,6 +95,7 @@ pub fn router(state: AppState) -> Router {
         // Decks
         .route("/decks", get(decks::list_decks))
         .route("/decks", post(decks::create_deck))
+        .route("/decks/counts", get(decks::deck_counts))
         .route("/decks/{id}", get(decks::get_deck))
         .route("/decks/{id}/rename", patch(decks::rename_deck))
         .route("/decks/{id}", delete(decks::delete_deck))
